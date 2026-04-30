@@ -29,10 +29,6 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
-
 public class MainActivity extends Activity {
     private static final String TAG = "FlashSwitch";
     private static final int CAMERA_PERMISSION_REQUEST = 4301;
@@ -49,7 +45,6 @@ public class MainActivity extends Activity {
 
     private CameraManager cameraManager;
     private Handler mainHandler;
-    private Runnable clockRunnable;
     private String torchCameraId;
     private boolean hasFlash;
     private boolean isTorchOn;
@@ -61,14 +56,8 @@ public class MainActivity extends Activity {
     private String detailOverride;
 
     private LinearLayout rootLayout;
-    private View statusBarView;
     private LinearLayout appBarView;
-    private TextView timeLabel;
     private TextView appTitleLabel;
-    private TextView appLeadingLabel;
-    private TextView appTrailingLabel;
-    private TextView statusIconsLabel;
-    private View punchHoleView;
     private View gesturePillView;
     private FlashToggleView flashToggleView;
     private LinearLayout heroCard;
@@ -76,7 +65,7 @@ public class MainActivity extends Activity {
     private LinearLayout infoCard;
     private TextView statusLabel;
     private TextView detailLabel;
-    private TextView actionLabel;
+    private PowerButtonView powerButtonView;
     private TextView brightnessTitleLabel;
     private LinearLayout brightnessChipsGroup;
     private TextView brightnessLowChip;
@@ -146,9 +135,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (mainHandler != null && clockRunnable != null) {
-            mainHandler.removeCallbacks(clockRunnable);
-        }
         if (isTorchOn && torchCameraId != null) {
             setTorch(false);
         }
@@ -199,7 +185,6 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
-        rootLayout.addView(buildStatusBar());
         rootLayout.addView(buildAppBar());
 
         LinearLayout content = new LinearLayout(this);
@@ -221,78 +206,24 @@ public class MainActivity extends Activity {
         content.addView(buildGestureBar());
 
         setContentView(rootLayout);
-        startClock();
-    }
-
-    private View buildStatusBar() {
-        FrameLayout bar = new FrameLayout(this);
-        statusBarView = bar;
-        bar.setPadding(dp(22), 0, dp(20), 0);
-        bar.setBackgroundColor(ZINC_950);
-
-        timeLabel = text("9:30", 14, ZINC_100, Typeface.BOLD);
-        timeLabel.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        FrameLayout.LayoutParams timeParams = new FrameLayout.LayoutParams(
-                dp(128),
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                Gravity.START | Gravity.CENTER_VERTICAL
-        );
-        bar.addView(timeLabel, timeParams);
-
-        punchHoleView = new View(this);
-        punchHoleView.setBackground(oval(Color.argb(205, 39, 39, 42)));
-        punchHoleView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        FrameLayout.LayoutParams holeParams = new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER);
-        bar.addView(punchHoleView, holeParams);
-
-        statusIconsLabel = text("◢  ▰", 13, ZINC_100, Typeface.BOLD);
-        statusIconsLabel.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        statusIconsLabel.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(
-                dp(96),
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                Gravity.END | Gravity.CENTER_VERTICAL
-        );
-        bar.addView(statusIconsLabel, iconParams);
-
-        bar.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(40)
-        ));
-        return bar;
     }
 
     private View buildAppBar() {
         appBarView = new LinearLayout(this);
         appBarView.setOrientation(LinearLayout.HORIZONTAL);
         appBarView.setGravity(Gravity.CENTER_VERTICAL);
-        appBarView.setPadding(dp(12), dp(4), dp(12), 0);
+        appBarView.setPadding(dp(24), dp(16), dp(24), 0);
         appBarView.setBackgroundColor(ZINC_950);
-
-        appLeadingLabel = appBarIcon("‹");
-        appLeadingLabel.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        appBarView.addView(appLeadingLabel);
 
         appTitleLabel = text("손전등", 22, ZINC_100, Typeface.BOLD);
         appTitleLabel.setGravity(Gravity.CENTER);
         appBarView.addView(appTitleLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        appTrailingLabel = appBarIcon("⋯");
-        appTrailingLabel.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        appBarView.addView(appTrailingLabel);
         appBarView.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(60)
+                dp(72)
         ));
         return appBarView;
-    }
-
-    private TextView appBarIcon(String icon) {
-        TextView label = text(icon, 24, ZINC_100, Typeface.NORMAL);
-        label.setGravity(Gravity.CENTER);
-        label.setBackground(oval(Color.argb(18, 255, 255, 255)));
-        label.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
-        return label;
     }
 
     private View buildHeroCard() {
@@ -329,17 +260,15 @@ public class MainActivity extends Activity {
         detailParams.topMargin = dp(8);
         heroCard.addView(detailLabel, detailParams);
 
-        actionLabel = text("⏻", 34, ZINC_950, Typeface.BOLD);
-        actionLabel.setGravity(Gravity.CENTER);
-        actionLabel.setClickable(true);
-        actionLabel.setFocusable(true);
-        actionLabel.setOnClickListener(view -> onToggleRequested());
-        actionLabel.setBackground(oval(Color.WHITE));
-        actionLabel.setElevation(dp(12));
+        powerButtonView = new PowerButtonView(this);
+        powerButtonView.setClickable(true);
+        powerButtonView.setFocusable(true);
+        powerButtonView.setOnClickListener(view -> onToggleRequested());
+        powerButtonView.setElevation(dp(12));
         LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(dp(92), dp(92));
         actionParams.gravity = Gravity.CENTER_HORIZONTAL;
         actionParams.topMargin = dp(34);
-        heroCard.addView(actionLabel, actionParams);
+        heroCard.addView(powerButtonView, actionParams);
 
         heroCard.addView(buildBrightnessSelector());
 
@@ -423,17 +352,18 @@ public class MainActivity extends Activity {
 
         brightnessChipsGroup = new LinearLayout(this);
         brightnessChipsGroup.setOrientation(LinearLayout.HORIZONTAL);
-        brightnessChipsGroup.setPadding(dp(4), dp(4), dp(4), dp(4));
+        brightnessChipsGroup.setGravity(Gravity.CENTER);
+        brightnessChipsGroup.setPadding(dp(5), dp(5), dp(5), dp(5));
         brightnessChipsGroup.setBackground(roundRect(Color.argb(18, 255, 255, 255), dp(999), Color.argb(18, 255, 255, 255)));
 
         brightnessLowChip = brightnessChip("약", 0);
         brightnessMidChip = brightnessChip("중", 1);
         brightnessHighChip = brightnessChip("강", 2);
-        brightnessChipsGroup.addView(brightnessLowChip, new LinearLayout.LayoutParams(0, dp(36), 1f));
-        brightnessChipsGroup.addView(brightnessMidChip, new LinearLayout.LayoutParams(0, dp(36), 1f));
-        brightnessChipsGroup.addView(brightnessHighChip, new LinearLayout.LayoutParams(0, dp(36), 1f));
+        brightnessChipsGroup.addView(brightnessLowChip, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        brightnessChipsGroup.addView(brightnessMidChip, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        brightnessChipsGroup.addView(brightnessHighChip, new LinearLayout.LayoutParams(0, dp(40), 1f));
 
-        LinearLayout.LayoutParams chipGroupParams = new LinearLayout.LayoutParams(dp(190), ViewGroup.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams chipGroupParams = new LinearLayout.LayoutParams(dp(228), dp(50));
         chipGroupParams.gravity = Gravity.CENTER_HORIZONTAL;
         chipGroupParams.topMargin = dp(6);
         group.addView(brightnessChipsGroup, chipGroupParams);
@@ -443,6 +373,9 @@ public class MainActivity extends Activity {
     private TextView brightnessChip(String label, int preset) {
         TextView chip = text(label, 12, ZINC_100, Typeface.BOLD);
         chip.setGravity(Gravity.CENTER);
+        chip.setIncludeFontPadding(false);
+        chip.setMinWidth(0);
+        chip.setPadding(0, 0, 0, 0);
         chip.setClickable(true);
         chip.setFocusable(true);
         chip.setOnClickListener(view -> onBrightnessPresetRequested(preset));
@@ -655,25 +588,21 @@ public class MainActivity extends Activity {
         if (!hasFlash || torchCameraId == null) {
             defaultStatus = "사용 불가";
             defaultDetail = "이 기기에서는 후면 플래시를 찾지 못했어요.";
-            actionLabel.setText("!");
             permissionChip.setText("플래시 하드웨어 없음");
             capabilityLabel.setText("사용 가능한 카메라 플래시를 찾지 못했습니다.");
         } else if (permissionNeeded) {
             defaultStatus = "권한 필요";
             defaultDetail = "권한을 허용하면 바로 플래시를 켤 수 있어요.";
-            actionLabel.setText("⏻");
             permissionChip.setText("카메라 권한 필요");
             capabilityLabel.setText(torchCapabilityText());
         } else if (isTorchOn) {
             defaultStatus = "켜짐";
             defaultDetail = "주변을 밝히는 중이에요. 탭하면 꺼집니다.";
-            actionLabel.setText("⏻");
             permissionChip.setText("권한 허용됨 · 토치 켜짐");
             capabilityLabel.setText(torchCapabilityText());
         } else {
             defaultStatus = "꺼짐";
             defaultDetail = "전원 버튼을 탭하면 손전등이 켜집니다.";
-            actionLabel.setText("⏻");
             permissionChip.setText("권한 허용됨 · 대기 중");
             capabilityLabel.setText(torchCapabilityText());
         }
@@ -700,21 +629,13 @@ public class MainActivity extends Activity {
         int cardStroke = on ? Color.argb(20, 0, 0, 0) : Color.argb(20, 255, 255, 255);
 
         rootLayout.setBackgroundColor(background);
-        statusBarView.setBackgroundColor(background);
         appBarView.setBackgroundColor(background);
         heroCard.setBackgroundColor(Color.TRANSPARENT);
         statusCard.setBackground(roundRect(cardBackground, dp(22), cardStroke));
         infoCard.setBackground(roundRect(cardBackground, dp(22), cardStroke));
         applySystemBars(on);
 
-        timeLabel.setTextColor(primaryText);
-        statusIconsLabel.setTextColor(primaryText);
         appTitleLabel.setTextColor(primaryText);
-        appLeadingLabel.setTextColor(primaryText);
-        appTrailingLabel.setTextColor(primaryText);
-        appLeadingLabel.setBackground(oval(on ? Color.argb(8, 0, 0, 0) : Color.argb(18, 255, 255, 255)));
-        appTrailingLabel.setBackground(oval(on ? Color.argb(8, 0, 0, 0) : Color.argb(18, 255, 255, 255)));
-        punchHoleView.setBackground(oval(on ? ZINC_200 : Color.argb(205, 39, 39, 42)));
         gesturePillView.setBackground(roundRect(on ? ZINC_800 : ZINC_100, dp(2), 0));
 
         statusLabel.setTextColor(primaryText);
@@ -726,16 +647,8 @@ public class MainActivity extends Activity {
         brightnessTitleLabel.setTextColor(mutedText);
         brightnessChipsGroup.setBackground(roundRect(cardBackground, dp(999), cardStroke));
 
-        if (!hasFlash || torchCameraId == null || permissionNeeded) {
-            actionLabel.setTextColor(on ? ZINC_800 : ZINC_950);
-            actionLabel.setBackground(oval(Color.argb(230, 244, 244, 245)));
-        } else if (on) {
-            actionLabel.setTextColor(BULB_AMBER);
-            actionLabel.setBackground(oval(ZINC_900));
-        } else {
-            actionLabel.setTextColor(ZINC_950);
-            actionLabel.setBackground(oval(Color.WHITE));
-        }
+        boolean unavailable = !hasFlash || torchCameraId == null;
+        powerButtonView.setPowerState(on, permissionNeeded, unavailable);
     }
 
     private void applySystemBars(boolean lightSurface) {
@@ -749,26 +662,6 @@ public class MainActivity extends Activity {
             flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         }
         window.getDecorView().setSystemUiVisibility(flags);
-    }
-
-    private void startClock() {
-        updateClock();
-        clockRunnable = new Runnable() {
-            @Override
-            public void run() {
-                updateClock();
-                mainHandler.postDelayed(this, 60_000L);
-            }
-        };
-        mainHandler.postDelayed(clockRunnable, 60_000L);
-    }
-
-    private void updateClock() {
-        if (timeLabel == null) {
-            return;
-        }
-        String time = new SimpleDateFormat("H:mm", Locale.KOREA).format(new Date());
-        timeLabel.setText(time);
     }
 
     private void showStatus(String status, String detail) {
@@ -937,7 +830,7 @@ public class MainActivity extends Activity {
         String detail = detailLabel.getText().toString();
         String action = actionAccessibilityLabel();
         heroCard.setContentDescription(state + ". " + detail);
-        actionLabel.setContentDescription(action);
+        powerButtonView.setContentDescription(action);
         permissionChip.setContentDescription("상태: " + permissionChip.getText());
     }
 
@@ -996,6 +889,81 @@ public class MainActivity extends Activity {
 
     private int dp(float value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private class PowerButtonView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private boolean on;
+        private boolean permissionNeeded;
+        private boolean unavailable;
+
+        PowerButtonView(Context context) {
+            super(context);
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        }
+
+        void setPowerState(boolean nextOn, boolean nextPermissionNeeded, boolean nextUnavailable) {
+            on = nextOn;
+            permissionNeeded = nextPermissionNeeded;
+            unavailable = nextUnavailable;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float width = getWidth();
+            float height = getHeight();
+            float centerX = width / 2f;
+            float centerY = height / 2f;
+            float radius = Math.min(width, height) * 0.46f;
+
+            int fillColor;
+            int iconColor;
+            if (unavailable || permissionNeeded) {
+                fillColor = Color.argb(235, 244, 244, 245);
+                iconColor = ZINC_700;
+            } else if (on) {
+                fillColor = ZINC_900;
+                iconColor = BULB_AMBER;
+            } else {
+                fillColor = Color.WHITE;
+                iconColor = ZINC_950;
+            }
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(fillColor);
+            paint.setShadowLayer(dp(14), 0f, dp(7), Color.argb(on ? 80 : 54, 0, 0, 0));
+            canvas.drawCircle(centerX, centerY, radius, paint);
+            paint.clearShadowLayer();
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeWidth(dp(5));
+            paint.setColor(iconColor);
+            float iconRadius = radius * 0.42f;
+            canvas.drawArc(
+                    centerX - iconRadius,
+                    centerY - iconRadius * 0.55f,
+                    centerX + iconRadius,
+                    centerY + iconRadius * 1.45f,
+                    135f,
+                    270f,
+                    false,
+                    paint
+            );
+            canvas.drawLine(centerX, centerY - radius * 0.48f, centerX, centerY + radius * 0.04f, paint);
+            paint.setStrokeCap(Paint.Cap.BUTT);
+
+            if (unavailable) {
+                paint.setStyle(Paint.Style.FILL);
+                paint.setTextAlign(Paint.Align.CENTER);
+                paint.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD));
+                paint.setTextSize(dp(16));
+                paint.setColor(ZINC_700);
+                canvas.drawText("!", centerX, centerY + radius * 0.72f, paint);
+            }
+        }
     }
 
     private class FlashToggleView extends View {
