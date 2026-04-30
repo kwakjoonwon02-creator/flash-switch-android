@@ -2,16 +2,38 @@ plugins {
     id 'com.android.application'
 }
 
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = file('../keystore.properties')
+if (!keystorePropertiesFile.exists()) {
+    throw new GradleException('Missing keystore.properties for release signing')
+}
+keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+
 android {
-    namespace 'com.example.flashswitch'
+    namespace 'com.kwakjoonwon.flashswitch'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.example.flashswitch'
+        applicationId 'com.kwakjoonwon.flashswitch'
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName '1.0'
+        versionCode 3
+        versionName '1.2'
+    }
+
+    signingConfigs {
+        release {
+            storeFile file('../' + keystoreProperties.getProperty('storeFile'))
+            storePassword keystoreProperties.getProperty('storePassword')
+            keyAlias keystoreProperties.getProperty('keyAlias')
+            keyPassword keystoreProperties.getProperty('keyPassword')
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+        }
     }
 }
 

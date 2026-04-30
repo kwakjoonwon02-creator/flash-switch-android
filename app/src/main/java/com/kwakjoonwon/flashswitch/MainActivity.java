@@ -1,4 +1,4 @@
-package com.example.flashswitch;
+package com.kwakjoonwon.flashswitch;
 
 import android.Manifest;
 import android.animation.ValueAnimator;
