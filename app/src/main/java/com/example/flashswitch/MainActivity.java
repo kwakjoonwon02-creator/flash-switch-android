@@ -29,6 +29,11 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdSize;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.MobileAds;
+
 public class MainActivity extends Activity {
     private static final String TAG = "FlashSwitch";
     private static final int CAMERA_PERMISSION_REQUEST = 4301;
@@ -42,6 +47,7 @@ public class MainActivity extends Activity {
     private static final int ZINC_100 = Color.rgb(244, 244, 245);
     private static final int BULB_YELLOW = Color.rgb(250, 204, 21);
     private static final int BULB_AMBER = Color.rgb(245, 158, 11);
+    private static final String BANNER_AD_UNIT_ID = "ca-app-pub-2142114665268625/7143992451";
 
     private CameraManager cameraManager;
     private Handler mainHandler;
@@ -57,8 +63,10 @@ public class MainActivity extends Activity {
 
     private LinearLayout rootLayout;
     private LinearLayout appBarView;
+    private FrameLayout adContainerView;
     private TextView appTitleLabel;
     private View gesturePillView;
+    private AdView bannerAdView;
     private FlashToggleView flashToggleView;
     private LinearLayout heroCard;
     private LinearLayout statusCard;
@@ -115,6 +123,7 @@ public class MainActivity extends Activity {
 
         configureSystemBars();
         buildUi();
+        initializeAds();
         if (cameraManager == null) {
             hasFlash = false;
             showStatus("카메라 서비스를 찾을 수 없어요", "이 기기에서는 플래시 제어를 사용할 수 없습니다.");
@@ -133,8 +142,28 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        if (bannerAdView != null) {
+            bannerAdView.pause();
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (bannerAdView != null) {
+            bannerAdView.resume();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (bannerAdView != null) {
+            bannerAdView.destroy();
+            bannerAdView = null;
+        }
         if (isTorchOn && torchCameraId != null) {
             setTorch(false);
         }
@@ -203,9 +232,54 @@ public class MainActivity extends Activity {
 
         View spacer = new View(this);
         content.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1f));
-        content.addView(buildGestureBar());
+
+        rootLayout.addView(buildAdContainer());
+        rootLayout.addView(buildGestureBar());
 
         setContentView(rootLayout);
+    }
+
+    private View buildAdContainer() {
+        adContainerView = new FrameLayout(this);
+        adContainerView.setPadding(dp(12), dp(8), dp(12), dp(8));
+        adContainerView.setBackgroundColor(ZINC_950);
+        adContainerView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        adContainerView.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        return adContainerView;
+    }
+
+    private void initializeAds() {
+        MobileAds.initialize(this, initializationStatus -> loadBannerAd());
+    }
+
+    private void loadBannerAd() {
+        if (adContainerView == null) {
+            return;
+        }
+
+        if (bannerAdView != null) {
+            bannerAdView.destroy();
+        }
+
+        bannerAdView = new AdView(this);
+        bannerAdView.setAdUnitId(BANNER_AD_UNIT_ID);
+        bannerAdView.setAdSize(AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(this, adWidthDp()));
+        adContainerView.removeAllViews();
+        adContainerView.addView(bannerAdView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+        ));
+        bannerAdView.loadAd(new AdRequest.Builder().build());
+    }
+
+    private int adWidthDp() {
+        float density = getResources().getDisplayMetrics().density;
+        int widthPixels = getResources().getDisplayMetrics().widthPixels - dp(24);
+        return Math.max(320, Math.round(widthPixels / density));
     }
 
     private View buildAppBar() {
@@ -630,6 +704,7 @@ public class MainActivity extends Activity {
 
         rootLayout.setBackgroundColor(background);
         appBarView.setBackgroundColor(background);
+        adContainerView.setBackgroundColor(background);
         heroCard.setBackgroundColor(Color.TRANSPARENT);
         statusCard.setBackground(roundRect(cardBackground, dp(22), cardStroke));
         infoCard.setBackground(roundRect(cardBackground, dp(22), cardStroke));
