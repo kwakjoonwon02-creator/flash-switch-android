@@ -1,4 +1,4 @@
-﻿# Privacy Policy for Flash Switch
+# Privacy Policy for Flash Switch
 
 Last updated: April 30, 2026
 
