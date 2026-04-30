@@ -102,7 +102,7 @@ public class MainActivity extends Activity {
             if (cameraId.equals(torchCameraId)) {
                 isTorchOn = false;
                 currentTorchStrengthLevel = 1;
-                showStatus("플래시를 잠시 사용할 수 없어요", "다른 앱이 카메라를 사용 중일 수 있어요.");
+                showStatus("Flash is temporarily unavailable", "Another app may be using the camera.");
                 refreshUi();
             }
         }
@@ -127,7 +127,7 @@ public class MainActivity extends Activity {
         initializeAds();
         if (cameraManager == null) {
             hasFlash = false;
-            showStatus("카메라 서비스를 찾을 수 없어요", "이 기기에서는 플래시 제어를 사용할 수 없습니다.");
+            showStatus("Camera service unavailable", "Flash control is not available on this device.");
             refreshUi();
             return;
         }
@@ -137,7 +137,7 @@ public class MainActivity extends Activity {
             torchCallbackRegistered = true;
         } catch (SecurityException exception) {
             Log.w(TAG, "Torch callback registration needs camera permission", exception);
-            showStatus("카메라 권한이 필요해요", "권한을 허용하면 플래시 상태를 확인할 수 있어요.");
+            showStatus("Camera permission required", "Allow permission to check the flash status.");
         }
         refreshUi();
     }
@@ -193,9 +193,9 @@ public class MainActivity extends Activity {
         pendingToggleAfterPermission = false;
         if (!granted) {
             if (!shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) {
-                showStatus("권한이 차단됐어요", "설정 > 앱 > Flash Switch에서 카메라 권한을 허용해 주세요.");
+                showStatus("Permission blocked", "Allow camera permission in Settings > Apps > Flash Switch.");
             } else {
-                showStatus("권한이 필요해요", "플래시를 켜려면 카메라 권한을 허용해 주세요.");
+                showStatus("Permission required", "Allow camera permission to turn on the flash.");
             }
             performErrorHaptic();
         }
@@ -295,7 +295,7 @@ public class MainActivity extends Activity {
         appBarView.setPadding(dp(20), dp(8), dp(20), 0);
         appBarView.setBackgroundColor(ZINC_950);
 
-        appTitleLabel = text("손전등", 22, ZINC_100, Typeface.BOLD);
+        appTitleLabel = text("Flashlight", 22, ZINC_100, Typeface.BOLD);
         appTitleLabel.setGravity(Gravity.CENTER);
         appBarView.addView(appTitleLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
@@ -322,7 +322,7 @@ public class MainActivity extends Activity {
         toggleParams.topMargin = dp(4);
         heroCard.addView(flashToggleView, toggleParams);
 
-        statusLabel = text("플래시 준비 중", 30, ZINC_100, Typeface.BOLD);
+        statusLabel = text("Preparing flash", 30, ZINC_100, Typeface.BOLD);
         statusLabel.setGravity(Gravity.CENTER);
         statusLabel.setTextSize(24);
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
@@ -332,7 +332,7 @@ public class MainActivity extends Activity {
         statusParams.topMargin = dp(4);
         heroCard.addView(statusLabel, statusParams);
 
-        detailLabel = text("카메라 플래시를 확인하고 있어요.", 15, ZINC_500, Typeface.NORMAL);
+        detailLabel = text("Checking the camera flash.", 15, ZINC_500, Typeface.NORMAL);
         detailLabel.setGravity(Gravity.CENTER);
         detailLabel.setTextSize(13);
         LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(
@@ -372,7 +372,7 @@ public class MainActivity extends Activity {
 
         statusCard.addView(tweakSectionLabel("DEVICE"));
 
-        permissionChip = text("권한 확인 중", 14, ZINC_100, Typeface.BOLD);
+        permissionChip = text("Checking permission", 14, ZINC_100, Typeface.BOLD);
         LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -380,7 +380,7 @@ public class MainActivity extends Activity {
         chipParams.topMargin = dp(4);
         statusCard.addView(permissionChip, chipParams);
 
-        capabilityLabel = text("토치 기능을 확인하고 있어요", 12, ZINC_500, Typeface.NORMAL);
+        capabilityLabel = text("Checking torch capability", 12, ZINC_500, Typeface.NORMAL);
         LinearLayout.LayoutParams capabilityParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -406,11 +406,11 @@ public class MainActivity extends Activity {
 
         infoCard.addView(tweakSectionLabel("SAFETY"));
 
-        keepAwakeLabel = text("화면 유지 · 꺼짐", 12, ZINC_500, Typeface.NORMAL);
-        feedbackLabel = text("햅틱 피드백 · 준비됨", 12, ZINC_500, Typeface.NORMAL);
+        keepAwakeLabel = text("Keep screen on - Off", 12, ZINC_500, Typeface.NORMAL);
+        feedbackLabel = text("Haptic feedback - Ready", 12, ZINC_500, Typeface.NORMAL);
 
-        infoCard.addView(featureRow("◐", "토치가 켜져 있을 때 화면을 계속 밝게 유지", keepAwakeLabel));
-        infoCard.addView(featureRow("•", "탭과 오류 상태를 촉감으로 알려줌", feedbackLabel));
+        infoCard.addView(featureRow("S", "Keeps the screen awake while the torch is on", keepAwakeLabel));
+        infoCard.addView(featureRow("H", "Confirms taps and errors with haptic feedback", feedbackLabel));
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -425,7 +425,7 @@ public class MainActivity extends Activity {
         group.setOrientation(LinearLayout.VERTICAL);
         group.setPadding(0, dp(12), 0, 0);
 
-        brightnessTitleLabel = text("밝기", 13, ZINC_500, Typeface.BOLD);
+        brightnessTitleLabel = text("Brightness", 13, ZINC_500, Typeface.BOLD);
         brightnessTitleLabel.setGravity(Gravity.CENTER);
         group.addView(brightnessTitleLabel, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -438,9 +438,9 @@ public class MainActivity extends Activity {
         brightnessChipsGroup.setPadding(dp(5), dp(5), dp(5), dp(5));
         brightnessChipsGroup.setBackground(roundRect(Color.argb(18, 255, 255, 255), dp(999), Color.argb(18, 255, 255, 255)));
 
-        brightnessLowChip = brightnessChip("약", 0);
-        brightnessMidChip = brightnessChip("중", 1);
-        brightnessHighChip = brightnessChip("강", 2);
+        brightnessLowChip = brightnessChip("Low", 0);
+        brightnessMidChip = brightnessChip("Medium", 1);
+        brightnessHighChip = brightnessChip("High", 2);
         brightnessChipsGroup.addView(brightnessLowChip, new LinearLayout.LayoutParams(0, dp(34), 1f));
         brightnessChipsGroup.addView(brightnessMidChip, new LinearLayout.LayoutParams(0, dp(34), 1f));
         brightnessChipsGroup.addView(brightnessHighChip, new LinearLayout.LayoutParams(0, dp(34), 1f));
@@ -546,13 +546,13 @@ public class MainActivity extends Activity {
             Log.w(TAG, "Unable to inspect cameras", exception);
             hasFlash = false;
             torchCameraId = null;
-            showStatus("카메라를 확인할 수 없어요", "기기의 카메라 서비스가 응답하지 않아요.");
+            showStatus("Unable to check camera", "The device camera service is not responding.");
         }
     }
 
     private void onToggleRequested() {
         if (!hasFlash || torchCameraId == null) {
-            showStatus("플래시가 없어요", "이 기기에서는 후면 플래시를 찾지 못했어요.");
+            showStatus("No flash found", "No rear flash was found on this device.");
             refreshUi();
             performErrorHaptic();
             return;
@@ -561,9 +561,9 @@ public class MainActivity extends Activity {
         if (!hasCameraPermission()) {
             pendingToggleAfterPermission = true;
             if (shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) {
-                showStatus("카메라 권한이 필요해요", "플래시 제어에는 카메라 권한이 필요합니다. 사진은 촬영하지 않아요.");
+                showStatus("Camera permission required", "Camera permission is required for flash control. No photos are taken.");
             } else {
-                showStatus("권한을 요청할게요", "허용을 누르면 바로 플래시를 켤 수 있어요.");
+                showStatus("Requesting permission", "Tap Allow to turn on the flash right away.");
             }
             requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
             refreshUi();
@@ -575,7 +575,7 @@ public class MainActivity extends Activity {
 
     private void setTorch(boolean enabled) {
         if (cameraManager == null || torchCameraId == null) {
-            showStatus("플래시가 없어요", "켜고 끌 수 있는 카메라 플래시가 없습니다.");
+            showStatus("No flash found", "There is no camera flash available to turn on or off.");
             refreshUi();
             performErrorHaptic();
             return;
@@ -595,17 +595,17 @@ public class MainActivity extends Activity {
             performToggleHaptic();
         } catch (SecurityException exception) {
             Log.w(TAG, "Camera permission missing while toggling torch", exception);
-            showStatus("권한이 필요해요", "설정에서 카메라 권한을 허용한 뒤 다시 시도해 주세요.");
+            showStatus("Permission required", "Allow camera permission in Settings, then try again.");
             refreshUi();
             performErrorHaptic();
         } catch (CameraAccessException | IllegalArgumentException exception) {
             Log.w(TAG, "Unable to toggle torch", exception);
-            showStatus("플래시 전환 실패", describeCameraError(exception));
+            showStatus("Flash toggle failed", describeCameraError(exception));
             refreshUi();
             performErrorHaptic();
         } catch (RuntimeException exception) {
             Log.w(TAG, "Unexpected torch failure", exception);
-            showStatus("플래시 전환 실패", "기기 카메라 서비스가 요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.");
+            showStatus("Flash toggle failed", "The device camera service could not handle the request. Try again shortly.");
             refreshUi();
             performErrorHaptic();
         }
@@ -614,7 +614,7 @@ public class MainActivity extends Activity {
     private void onBrightnessPresetRequested(int preset) {
         if (!hasFlash || torchCameraId == null) {
             performErrorHaptic();
-            showStatus("플래시가 없어요", "이 기기에서는 밝기를 조절할 토치를 찾지 못했어요.");
+            showStatus("No flash found", "No torch with brightness control was found on this device.");
             refreshUi();
             return;
         }
@@ -622,7 +622,7 @@ public class MainActivity extends Activity {
         if (!hasCameraPermission()) {
             pendingToggleAfterPermission = true;
             currentTorchStrengthLevel = strengthForPreset(preset);
-            showStatus("권한을 요청할게요", "허용하면 선택한 밝기로 바로 켜집니다.");
+            showStatus("Requesting permission", "Allow permission to turn it on with the selected brightness.");
             requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
             refreshUi();
             return;
@@ -634,7 +634,7 @@ public class MainActivity extends Activity {
             if (!wasOn) {
                 setTorch(true);
             }
-            showStatus("자동 밝기", "이 기기는 별도 밝기 단계 없이 기본 토치 모드로 켜집니다.");
+            showStatus("Automatic brightness", "This device uses the default torch mode without separate brightness levels.");
             refreshUi();
             if (wasOn) {
                 performToggleHaptic();
@@ -647,17 +647,17 @@ public class MainActivity extends Activity {
             cameraManager.turnOnTorchWithStrengthLevel(torchCameraId, currentTorchStrengthLevel);
             isTorchOn = true;
             clearStatusOverride();
-            showStatus(brightnessPresetLabel(preset) + " 밝기", "밝기 선택은 약 · 중 · 강 세 단계로 간단히 바꿀 수 있어요.");
+            showStatus(brightnessPresetLabel(preset) + " brightness", "Choose brightness quickly with Low, Medium, or High presets.");
             refreshUi();
             performToggleHaptic();
         } catch (SecurityException exception) {
             Log.w(TAG, "Camera permission missing while changing torch strength", exception);
-            showStatus("권한이 필요해요", "밝기를 조절하려면 카메라 권한을 허용해 주세요.");
+            showStatus("Permission required", "Allow camera permission to adjust brightness.");
             refreshUi();
             performErrorHaptic();
         } catch (CameraAccessException | RuntimeException exception) {
             Log.w(TAG, "Unable to change torch strength", exception);
-            showStatus("밝기 조절 실패", describeCameraError(exception));
+            showStatus("Brightness adjustment failed", describeCameraError(exception));
             refreshUi();
             performErrorHaptic();
         }
@@ -668,24 +668,24 @@ public class MainActivity extends Activity {
         String defaultStatus;
         String defaultDetail;
         if (!hasFlash || torchCameraId == null) {
-            defaultStatus = "사용 불가";
-            defaultDetail = "이 기기에서는 후면 플래시를 찾지 못했어요.";
-            permissionChip.setText("플래시 하드웨어 없음");
-            capabilityLabel.setText("사용 가능한 카메라 플래시를 찾지 못했습니다.");
+            defaultStatus = "Unavailable";
+            defaultDetail = "No rear flash was found on this device.";
+            permissionChip.setText("No flash hardware");
+            capabilityLabel.setText("No available camera flash was found.");
         } else if (permissionNeeded) {
-            defaultStatus = "권한 필요";
-            defaultDetail = "권한을 허용하면 바로 플래시를 켤 수 있어요.";
-            permissionChip.setText("카메라 권한 필요");
+            defaultStatus = "Permission needed";
+            defaultDetail = "Allow permission to turn on the flash right away.";
+            permissionChip.setText("Camera permission required");
             capabilityLabel.setText(torchCapabilityText());
         } else if (isTorchOn) {
-            defaultStatus = "켜짐";
-            defaultDetail = "주변을 밝히는 중이에요. 탭하면 꺼집니다.";
-            permissionChip.setText("권한 허용됨 · 토치 켜짐");
+            defaultStatus = "On";
+            defaultDetail = "Lighting your surroundings. Tap to turn off.";
+            permissionChip.setText("Permission granted - Torch on");
             capabilityLabel.setText(torchCapabilityText());
         } else {
-            defaultStatus = "꺼짐";
-            defaultDetail = "전원 버튼을 탭하면 손전등이 켜집니다.";
-            permissionChip.setText("권한 허용됨 · 대기 중");
+            defaultStatus = "Off";
+            defaultDetail = "Tap the power button to turn on the flashlight.";
+            permissionChip.setText("Permission granted - Standby");
             capabilityLabel.setText(torchCapabilityText());
         }
 
@@ -699,8 +699,8 @@ public class MainActivity extends Activity {
         updateBrightnessChips();
         updateKeepScreenOn();
         updateAccessibility();
-        keepAwakeLabel.setText(isTorchOn ? "화면 유지 · 켜짐" : "화면 유지 · 꺼짐");
-        feedbackLabel.setText("햅틱 피드백 · " + (isTorchOn ? "켜짐 확인" : "탭 준비"));
+        keepAwakeLabel.setText(isTorchOn ? "Keep screen on - On" : "Keep screen on - Off");
+        feedbackLabel.setText("Haptic feedback - " + (isTorchOn ? "On confirmed" : "Ready for tap"));
     }
 
     private void applyVisualState(boolean on, boolean permissionNeeded) {
@@ -818,19 +818,19 @@ public class MainActivity extends Activity {
 
     private String brightnessPresetLabel(int preset) {
         if (preset <= 0) {
-            return "약";
+            return "Low";
         }
         if (preset == 1) {
-            return "중";
+            return "Medium";
         }
-        return "강";
+        return "High";
     }
 
     private String torchCapabilityText() {
         if (supportsStrengthControl()) {
-            return "밝기 조절 지원 · 약/중/강 중 선택";
+            return "Brightness control supported - Choose Low/Medium/High";
         }
-        return "기본 토치 제어 지원 · 안정적인 켜기/끄기 모드";
+        return "Basic torch control supported - Stable on/off mode";
     }
 
     private void updateBrightnessChips() {
@@ -886,18 +886,18 @@ public class MainActivity extends Activity {
             CameraAccessException cameraException = (CameraAccessException) exception;
             switch (cameraException.getReason()) {
                 case CameraAccessException.CAMERA_IN_USE:
-                    return "다른 앱이 카메라를 사용 중이에요. 닫은 뒤 다시 시도해 주세요.";
+                    return "Another app is using the camera. Close it, then try again.";
                 case CameraAccessException.MAX_CAMERAS_IN_USE:
-                    return "동시에 열린 카메라가 너무 많아요. 잠시 후 다시 시도해 주세요.";
+                    return "Too many cameras are open. Try again shortly.";
                 case CameraAccessException.CAMERA_DISABLED:
-                    return "기기 정책에서 카메라가 비활성화되어 플래시를 켤 수 없어요.";
+                    return "Camera is disabled by device policy, so the flash cannot be turned on.";
                 case CameraAccessException.CAMERA_DISCONNECTED:
-                    return "카메라 연결이 끊겼어요. 화면을 잠시 껐다 켠 뒤 다시 시도해 주세요.";
+                    return "The camera disconnected. Turn the screen off and on, then try again.";
                 default:
-                    return "카메라 서비스가 잠시 응답하지 않아요. 다시 시도해 주세요.";
+                    return "The camera service is not responding right now. Try again.";
             }
         }
-        return "이 기기의 토치가 현재 요청을 받을 수 없어요. 잠시 후 다시 시도해 주세요.";
+        return "This device's torch cannot accept requests right now. Try again shortly.";
     }
 
     private void updateKeepScreenOn() {
@@ -914,17 +914,17 @@ public class MainActivity extends Activity {
         String action = actionAccessibilityLabel();
         heroCard.setContentDescription(state + ". " + detail);
         powerButtonView.setContentDescription(action);
-        permissionChip.setContentDescription("상태: " + permissionChip.getText());
+        permissionChip.setContentDescription("Status: " + permissionChip.getText());
     }
 
     private String actionAccessibilityLabel() {
         if (!hasFlash || torchCameraId == null) {
-            return "플래시 사용 불가";
+            return "Flash unavailable";
         }
         if (!hasCameraPermission()) {
-            return "카메라 권한 요청";
+            return "Request camera permission";
         }
-        return isTorchOn ? "손전등 끄기" : "손전등 켜기";
+        return isTorchOn ? "Turn flashlight off" : "Turn flashlight on";
     }
 
     private void performToggleHaptic() {
