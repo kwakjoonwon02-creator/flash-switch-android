@@ -27,6 +27,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.google.android.gms.ads.AdRequest;
@@ -216,11 +217,19 @@ public class MainActivity extends Activity {
 
         rootLayout.addView(buildAppBar());
 
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        scrollView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setGravity(Gravity.CENTER_HORIZONTAL);
-        content.setPadding(dp(24), dp(18), dp(24), dp(10));
-        rootLayout.addView(content, new LinearLayout.LayoutParams(
+        content.setPadding(dp(20), dp(8), dp(20), dp(6));
+        scrollView.addView(content, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        rootLayout.addView(scrollView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1f
@@ -230,9 +239,6 @@ public class MainActivity extends Activity {
         content.addView(buildStatusCard());
         content.addView(buildInfoCard());
 
-        View spacer = new View(this);
-        content.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1f));
-
         rootLayout.addView(buildAdContainer());
         rootLayout.addView(buildGestureBar());
 
@@ -241,7 +247,7 @@ public class MainActivity extends Activity {
 
     private View buildAdContainer() {
         adContainerView = new FrameLayout(this);
-        adContainerView.setPadding(dp(12), dp(8), dp(12), dp(8));
+        adContainerView.setPadding(dp(10), dp(4), dp(10), dp(4));
         adContainerView.setBackgroundColor(ZINC_950);
         adContainerView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         adContainerView.setLayoutParams(new LinearLayout.LayoutParams(
@@ -278,15 +284,15 @@ public class MainActivity extends Activity {
 
     private int adWidthDp() {
         float density = getResources().getDisplayMetrics().density;
-        int widthPixels = getResources().getDisplayMetrics().widthPixels - dp(24);
-        return Math.max(320, Math.round(widthPixels / density));
+        int widthPixels = getResources().getDisplayMetrics().widthPixels - dp(20);
+        return Math.max(1, Math.round(widthPixels / density));
     }
 
     private View buildAppBar() {
         appBarView = new LinearLayout(this);
         appBarView.setOrientation(LinearLayout.HORIZONTAL);
         appBarView.setGravity(Gravity.CENTER_VERTICAL);
-        appBarView.setPadding(dp(24), dp(16), dp(24), 0);
+        appBarView.setPadding(dp(20), dp(8), dp(20), 0);
         appBarView.setBackgroundColor(ZINC_950);
 
         appTitleLabel = text("손전등", 22, ZINC_100, Typeface.BOLD);
@@ -295,7 +301,7 @@ public class MainActivity extends Activity {
 
         appBarView.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(72)
+                dp(56)
         ));
         return appBarView;
     }
@@ -304,34 +310,36 @@ public class MainActivity extends Activity {
         heroCard = new LinearLayout(this);
         heroCard.setOrientation(LinearLayout.VERTICAL);
         heroCard.setGravity(Gravity.CENTER_HORIZONTAL);
-        heroCard.setPadding(0, dp(8), 0, dp(8));
+        heroCard.setPadding(0, dp(2), 0, dp(4));
         heroCard.setBackgroundColor(Color.TRANSPARENT);
         heroCard.setClickable(false);
         heroCard.setFocusable(false);
 
         flashToggleView = new FlashToggleView(this);
         flashToggleView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(dp(280), dp(280));
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(dp(210), dp(210));
         toggleParams.gravity = Gravity.CENTER_HORIZONTAL;
-        toggleParams.topMargin = dp(18);
+        toggleParams.topMargin = dp(4);
         heroCard.addView(flashToggleView, toggleParams);
 
         statusLabel = text("플래시 준비 중", 30, ZINC_100, Typeface.BOLD);
         statusLabel.setGravity(Gravity.CENTER);
+        statusLabel.setTextSize(24);
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        statusParams.topMargin = dp(10);
+        statusParams.topMargin = dp(4);
         heroCard.addView(statusLabel, statusParams);
 
         detailLabel = text("카메라 플래시를 확인하고 있어요.", 15, ZINC_500, Typeface.NORMAL);
         detailLabel.setGravity(Gravity.CENTER);
+        detailLabel.setTextSize(13);
         LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        detailParams.topMargin = dp(8);
+        detailParams.topMargin = dp(3);
         heroCard.addView(detailLabel, detailParams);
 
         powerButtonView = new PowerButtonView(this);
@@ -339,9 +347,9 @@ public class MainActivity extends Activity {
         powerButtonView.setFocusable(true);
         powerButtonView.setOnClickListener(view -> onToggleRequested());
         powerButtonView.setElevation(dp(12));
-        LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(dp(92), dp(92));
+        LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(dp(72), dp(72));
         actionParams.gravity = Gravity.CENTER_HORIZONTAL;
-        actionParams.topMargin = dp(34);
+        actionParams.topMargin = dp(12);
         heroCard.addView(powerButtonView, actionParams);
 
         heroCard.addView(buildBrightnessSelector());
@@ -350,7 +358,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        cardParams.bottomMargin = dp(18);
+        cardParams.bottomMargin = dp(8);
         heroCard.setLayoutParams(cardParams);
         return heroCard;
     }
@@ -358,7 +366,7 @@ public class MainActivity extends Activity {
     private View buildStatusCard() {
         statusCard = new LinearLayout(this);
         statusCard.setOrientation(LinearLayout.VERTICAL);
-        statusCard.setPadding(dp(16), dp(14), dp(16), dp(14));
+        statusCard.setPadding(dp(14), dp(8), dp(14), dp(8));
         statusCard.setBackground(roundRect(Color.argb(18, 255, 255, 255), dp(22), Color.argb(20, 255, 255, 255)));
         statusCard.setElevation(dp(2));
 
@@ -384,7 +392,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        params.bottomMargin = dp(12);
+        params.bottomMargin = dp(8);
         statusCard.setLayoutParams(params);
         return statusCard;
     }
@@ -392,7 +400,7 @@ public class MainActivity extends Activity {
     private View buildInfoCard() {
         infoCard = new LinearLayout(this);
         infoCard.setOrientation(LinearLayout.VERTICAL);
-        infoCard.setPadding(dp(16), dp(14), dp(16), dp(14));
+        infoCard.setPadding(dp(14), dp(8), dp(14), dp(8));
         infoCard.setBackground(roundRect(Color.argb(18, 255, 255, 255), dp(22), Color.argb(20, 255, 255, 255)));
         infoCard.setElevation(dp(2));
 
@@ -415,13 +423,13 @@ public class MainActivity extends Activity {
     private View buildBrightnessSelector() {
         LinearLayout group = new LinearLayout(this);
         group.setOrientation(LinearLayout.VERTICAL);
-        group.setPadding(0, dp(28), 0, dp(2));
+        group.setPadding(0, dp(12), 0, 0);
 
         brightnessTitleLabel = text("밝기", 13, ZINC_500, Typeface.BOLD);
         brightnessTitleLabel.setGravity(Gravity.CENTER);
         group.addView(brightnessTitleLabel, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(24)
+                dp(20)
         ));
 
         brightnessChipsGroup = new LinearLayout(this);
@@ -433,13 +441,13 @@ public class MainActivity extends Activity {
         brightnessLowChip = brightnessChip("약", 0);
         brightnessMidChip = brightnessChip("중", 1);
         brightnessHighChip = brightnessChip("강", 2);
-        brightnessChipsGroup.addView(brightnessLowChip, new LinearLayout.LayoutParams(0, dp(40), 1f));
-        brightnessChipsGroup.addView(brightnessMidChip, new LinearLayout.LayoutParams(0, dp(40), 1f));
-        brightnessChipsGroup.addView(brightnessHighChip, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        brightnessChipsGroup.addView(brightnessLowChip, new LinearLayout.LayoutParams(0, dp(34), 1f));
+        brightnessChipsGroup.addView(brightnessMidChip, new LinearLayout.LayoutParams(0, dp(34), 1f));
+        brightnessChipsGroup.addView(brightnessHighChip, new LinearLayout.LayoutParams(0, dp(34), 1f));
 
-        LinearLayout.LayoutParams chipGroupParams = new LinearLayout.LayoutParams(dp(228), dp(50));
+        LinearLayout.LayoutParams chipGroupParams = new LinearLayout.LayoutParams(dp(214), dp(44));
         chipGroupParams.gravity = Gravity.CENTER_HORIZONTAL;
-        chipGroupParams.topMargin = dp(6);
+        chipGroupParams.topMargin = dp(4);
         group.addView(brightnessChipsGroup, chipGroupParams);
         return group;
     }
@@ -460,17 +468,17 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, dp(12), 0, 0);
+        row.setPadding(0, dp(8), 0, 0);
 
-        TextView leading = text(icon, 15, ZINC_950, Typeface.BOLD);
+        TextView leading = text(icon, 13, ZINC_950, Typeface.BOLD);
         leading.setGravity(Gravity.CENTER);
         leading.setBackground(oval(BULB_YELLOW));
-        row.addView(leading, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        row.addView(leading, new LinearLayout.LayoutParams(dp(24), dp(24)));
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setPadding(dp(12), 0, 0, 0);
-        TextView description = text(descriptionText, 13, ZINC_100, Typeface.NORMAL);
+        TextView description = text(descriptionText, 12, ZINC_100, Typeface.NORMAL);
         copy.addView(description);
         copy.addView(valueLabel);
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -481,7 +489,7 @@ public class MainActivity extends Activity {
         TextView label = text(value, 10, ZINC_500, Typeface.BOLD);
         label.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         label.setLetterSpacing(0.06f);
-        label.setPadding(0, dp(10), 0, 0);
+        label.setPadding(0, dp(4), 0, 0);
         return label;
     }
 
@@ -494,7 +502,7 @@ public class MainActivity extends Activity {
         nav.addView(gesturePillView, new FrameLayout.LayoutParams(dp(108), dp(4), Gravity.CENTER));
         nav.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(24)
+                dp(18)
         ));
         return nav;
     }
