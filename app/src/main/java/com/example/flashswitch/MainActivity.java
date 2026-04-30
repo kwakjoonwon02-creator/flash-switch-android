@@ -68,6 +68,9 @@ public class MainActivity extends Activity {
     private TextView statusLabel;
     private TextView detailLabel;
     private TextView actionLabel;
+    private TextView brightnessLowChip;
+    private TextView brightnessMidChip;
+    private TextView brightnessHighChip;
     private TextView permissionChip;
     private TextView capabilityLabel;
     private TextView keepAwakeLabel;
@@ -287,10 +290,6 @@ public class MainActivity extends Activity {
         heroCard.setClickable(true);
         heroCard.setFocusable(true);
         heroCard.setOnClickListener(view -> onToggleRequested());
-        heroCard.setOnLongClickListener(view -> {
-            cycleTorchStrength();
-            return true;
-        });
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
@@ -320,6 +319,8 @@ public class MainActivity extends Activity {
         powerRow.addView(powerLabel, new LinearLayout.LayoutParams(0, dp(30), 1f));
         powerRow.addView(actionLabel, new LinearLayout.LayoutParams(dp(52), dp(26)));
         heroCard.addView(powerRow);
+
+        heroCard.addView(buildBrightnessSelector());
 
         flashToggleView = new FlashToggleView(this);
         flashToggleView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
@@ -412,6 +413,45 @@ public class MainActivity extends Activity {
         );
         card.setLayoutParams(params);
         return card;
+    }
+
+    private View buildBrightnessSelector() {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        group.setPadding(0, dp(4), 0, dp(6));
+
+        TextView label = text("Brightness", 13, TWEAK_TEXT, Typeface.NORMAL);
+        group.addView(label, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(24)
+        ));
+
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        chips.setPadding(dp(2), dp(2), dp(2), dp(2));
+        chips.setBackground(roundRect(Color.argb(15, 0, 0, 0), dp(8), 0));
+
+        brightnessLowChip = brightnessChip("약", 0);
+        brightnessMidChip = brightnessChip("중", 1);
+        brightnessHighChip = brightnessChip("강", 2);
+        chips.addView(brightnessLowChip, new LinearLayout.LayoutParams(0, dp(28), 1f));
+        chips.addView(brightnessMidChip, new LinearLayout.LayoutParams(0, dp(28), 1f));
+        chips.addView(brightnessHighChip, new LinearLayout.LayoutParams(0, dp(28), 1f));
+
+        group.addView(chips, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        return group;
+    }
+
+    private TextView brightnessChip(String label, int preset) {
+        TextView chip = text(label, 12, TWEAK_TEXT, Typeface.BOLD);
+        chip.setGravity(Gravity.CENTER);
+        chip.setClickable(true);
+        chip.setFocusable(true);
+        chip.setOnClickListener(view -> onBrightnessPresetRequested(preset));
+        return chip;
     }
 
     private View featureRow(String icon, String descriptionText, TextView valueLabel) {
@@ -537,9 +577,6 @@ public class MainActivity extends Activity {
                 currentTorchStrengthLevel = level;
             } else {
                 cameraManager.setTorchMode(torchCameraId, enabled);
-                if (!enabled) {
-                    currentTorchStrengthLevel = 1;
-                }
             }
             isTorchOn = enabled;
             clearStatusOverride();
@@ -563,19 +600,43 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void cycleTorchStrength() {
-        if (!isTorchOn || !supportsStrengthControl()) {
+    private void onBrightnessPresetRequested(int preset) {
+        if (!hasFlash || torchCameraId == null) {
             performErrorHaptic();
-            showStatus("밝기 조절 대기 중", "Android 13+ 지원 기기에서 플래시가 켜져 있을 때 길게 누르면 밝기가 바뀝니다.");
+            showStatus("플래시가 없어요", "이 기기에서는 밝기를 조절할 토치를 찾지 못했어요.");
             refreshUi();
             return;
         }
 
-        int nextLevel = currentTorchStrengthLevel >= maxTorchStrengthLevel ? 1 : currentTorchStrengthLevel + 1;
+        if (!hasCameraPermission()) {
+            pendingToggleAfterPermission = true;
+            currentTorchStrengthLevel = strengthForPreset(preset);
+            showStatus("권한을 요청할게요", "허용하면 선택한 밝기로 바로 켜집니다.");
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
+            refreshUi();
+            return;
+        }
+
+        if (!supportsStrengthControl()) {
+            currentTorchStrengthLevel = 1;
+            boolean wasOn = isTorchOn;
+            if (!wasOn) {
+                setTorch(true);
+            }
+            showStatus("자동 밝기", "이 기기는 별도 밝기 단계 없이 기본 토치 모드로 켜집니다.");
+            refreshUi();
+            if (wasOn) {
+                performToggleHaptic();
+            }
+            return;
+        }
+
+        currentTorchStrengthLevel = strengthForPreset(preset);
         try {
-            cameraManager.turnOnTorchWithStrengthLevel(torchCameraId, nextLevel);
-            currentTorchStrengthLevel = nextLevel;
-            showStatus("밝기 " + currentTorchStrengthLevel + "단계", "길게 누르면 다음 밝기 단계로 전환됩니다.");
+            cameraManager.turnOnTorchWithStrengthLevel(torchCameraId, currentTorchStrengthLevel);
+            isTorchOn = true;
+            clearStatusOverride();
+            showStatus(brightnessPresetLabel(preset) + " 밝기", "밝기 선택은 약 · 중 · 강 세 단계로 간단히 바꿀 수 있어요.");
             refreshUi();
             performToggleHaptic();
         } catch (SecurityException exception) {
@@ -629,6 +690,7 @@ public class MainActivity extends Activity {
         heroCard.setBackground(roundRect(TWEAK_PANEL, dp(14), Color.argb(153, 255, 255, 255)));
         actionLabel.setBackground(roundRect(isTorchOn ? SYSTEM_GREEN : Color.argb(38, 0, 0, 0), dp(999), 0));
         flashToggleView.setFlashState(isTorchOn, hasFlash && torchCameraId != null, permissionNeeded);
+        updateBrightnessChips();
         updateKeepScreenOn();
         updateAccessibility();
         keepAwakeLabel.setText(isTorchOn ? "화면 유지 · 켜짐" : "화면 유지 · 꺼짐");
@@ -671,11 +733,75 @@ public class MainActivity extends Activity {
         return Math.max(1, Math.min(maxTorchStrengthLevel, requestedLevel));
     }
 
+    private int strengthForPreset(int preset) {
+        if (!supportsStrengthControl()) {
+            return 1;
+        }
+        if (preset <= 0) {
+            return 1;
+        }
+        if (preset == 1) {
+            return clampTorchStrength(Math.max(1, Math.round(maxTorchStrengthLevel * 0.55f)));
+        }
+        return maxTorchStrengthLevel;
+    }
+
+    private int presetForCurrentStrength() {
+        if (!supportsStrengthControl()) {
+            return -1;
+        }
+
+        int low = strengthForPreset(0);
+        int mid = strengthForPreset(1);
+        int high = strengthForPreset(2);
+        int lowDistance = Math.abs(currentTorchStrengthLevel - low);
+        int midDistance = Math.abs(currentTorchStrengthLevel - mid);
+        int highDistance = Math.abs(currentTorchStrengthLevel - high);
+        if (lowDistance <= midDistance && lowDistance <= highDistance) {
+            return 0;
+        }
+        if (midDistance <= highDistance) {
+            return 1;
+        }
+        return 2;
+    }
+
+    private String brightnessPresetLabel(int preset) {
+        if (preset <= 0) {
+            return "약";
+        }
+        if (preset == 1) {
+            return "중";
+        }
+        return "강";
+    }
+
     private String torchCapabilityText() {
         if (supportsStrengthControl()) {
-            return "Android 13+ 밝기 제어 지원 · 현재 " + currentTorchStrengthLevel + "/" + maxTorchStrengthLevel + "단계 · 길게 눌러 변경";
+            return "밝기 조절 지원 · 약/중/강 중 선택";
         }
         return "기본 토치 제어 지원 · 안정적인 켜기/끄기 모드";
+    }
+
+    private void updateBrightnessChips() {
+        if (brightnessLowChip == null || brightnessMidChip == null || brightnessHighChip == null) {
+            return;
+        }
+
+        int selectedPreset = presetForCurrentStrength();
+        boolean enabled = hasFlash && torchCameraId != null;
+        styleBrightnessChip(brightnessLowChip, selectedPreset == 0, enabled);
+        styleBrightnessChip(brightnessMidChip, selectedPreset == 1, enabled);
+        styleBrightnessChip(brightnessHighChip, selectedPreset == 2, enabled);
+    }
+
+    private void styleBrightnessChip(TextView chip, boolean selected, boolean enabled) {
+        int background = selected && enabled ? Color.WHITE : Color.TRANSPARENT;
+        int textColor = enabled ? TWEAK_TEXT : Color.argb(95, 41, 38, 27);
+        chip.setTextColor(textColor);
+        chip.setAlpha(enabled ? 1f : 0.55f);
+        chip.setBackground(roundRect(background, dp(6), selected && enabled ? TWEAK_RULE : 0));
+        chip.setEnabled(enabled);
     }
 
     private void ensureTorchCallbackRegistered() {
