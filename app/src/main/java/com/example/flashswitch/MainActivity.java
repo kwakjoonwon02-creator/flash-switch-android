@@ -9,7 +9,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.camera2.CameraAccessException;
@@ -30,29 +29,27 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+
 public class MainActivity extends Activity {
     private static final String TAG = "FlashSwitch";
     private static final int CAMERA_PERMISSION_REQUEST = 4301;
 
-    private static final int SURFACE = Color.rgb(244, 251, 248);
-    private static final int SURFACE_VARIANT = Color.rgb(218, 229, 225);
-    private static final int INVERSE_ON_SURFACE = Color.rgb(236, 242, 239);
-    private static final int SECONDARY_CONTAINER = Color.rgb(205, 232, 225);
-    private static final int PRIMARY_FIXED_DIM = Color.rgb(131, 213, 198);
-    private static final int ON_SURFACE = Color.rgb(23, 29, 27);
-    private static final int ON_SURFACE_VARIANT = Color.rgb(73, 69, 79);
-    private static final int ON_PRIMARY_CONTAINER = Color.rgb(0, 32, 28);
-    private static final int PRIMARY = Color.rgb(0, 106, 96);
-    private static final int SURFACE_CONTAINER_LOW = Color.rgb(239, 247, 243);
-    private static final int OUTLINE_VARIANT = Color.argb(66, 116, 119, 117);
-    private static final int TWEAK_PANEL = Color.argb(224, 250, 249, 247);
-    private static final int TWEAK_TEXT = Color.rgb(41, 38, 27);
-    private static final int TWEAK_MUTED = Color.argb(184, 41, 38, 27);
-    private static final int TWEAK_RULE = Color.argb(38, 0, 0, 0);
-    private static final int SYSTEM_GREEN = Color.rgb(52, 199, 89);
+    private static final int ZINC_950 = Color.rgb(9, 9, 11);
+    private static final int ZINC_900 = Color.rgb(24, 24, 27);
+    private static final int ZINC_800 = Color.rgb(39, 39, 42);
+    private static final int ZINC_700 = Color.rgb(63, 63, 70);
+    private static final int ZINC_500 = Color.rgb(113, 113, 122);
+    private static final int ZINC_200 = Color.rgb(228, 228, 231);
+    private static final int ZINC_100 = Color.rgb(244, 244, 245);
+    private static final int BULB_YELLOW = Color.rgb(250, 204, 21);
+    private static final int BULB_AMBER = Color.rgb(245, 158, 11);
 
     private CameraManager cameraManager;
     private Handler mainHandler;
+    private Runnable clockRunnable;
     private String torchCameraId;
     private boolean hasFlash;
     private boolean isTorchOn;
@@ -63,11 +60,25 @@ public class MainActivity extends Activity {
     private String statusOverride;
     private String detailOverride;
 
+    private LinearLayout rootLayout;
+    private View statusBarView;
+    private LinearLayout appBarView;
+    private TextView timeLabel;
+    private TextView appTitleLabel;
+    private TextView appLeadingLabel;
+    private TextView appTrailingLabel;
+    private TextView statusIconsLabel;
+    private View punchHoleView;
+    private View gesturePillView;
     private FlashToggleView flashToggleView;
     private LinearLayout heroCard;
+    private LinearLayout statusCard;
+    private LinearLayout infoCard;
     private TextView statusLabel;
     private TextView detailLabel;
     private TextView actionLabel;
+    private TextView brightnessTitleLabel;
+    private LinearLayout brightnessChipsGroup;
     private TextView brightnessLowChip;
     private TextView brightnessMidChip;
     private TextView brightnessHighChip;
@@ -135,6 +146,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (mainHandler != null && clockRunnable != null) {
+            mainHandler.removeCallbacks(clockRunnable);
+        }
         if (isTorchOn && torchCameraId != null) {
             setTorch(false);
         }
@@ -173,34 +187,26 @@ public class MainActivity extends Activity {
     }
 
     private void configureSystemBars() {
-        Window window = getWindow();
-        window.setStatusBarColor(SURFACE);
-        window.setNavigationBarColor(SURFACE);
-
-        int flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-        }
-        window.getDecorView().setSystemUiVisibility(flags);
+        applySystemBars(false);
     }
 
     private void buildUi() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(SURFACE);
-        root.setLayoutParams(new LinearLayout.LayoutParams(
+        rootLayout = new LinearLayout(this);
+        rootLayout.setOrientation(LinearLayout.VERTICAL);
+        rootLayout.setBackgroundColor(ZINC_950);
+        rootLayout.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
-        root.addView(buildStatusBar());
-        root.addView(buildAppBar());
+        rootLayout.addView(buildStatusBar());
+        rootLayout.addView(buildAppBar());
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setGravity(Gravity.CENTER_HORIZONTAL);
-        content.setPadding(dp(18), dp(20), dp(18), dp(12));
-        root.addView(content, new LinearLayout.LayoutParams(
+        content.setPadding(dp(24), dp(18), dp(24), dp(10));
+        rootLayout.addView(content, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1f
@@ -214,35 +220,40 @@ public class MainActivity extends Activity {
         content.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1f));
         content.addView(buildGestureBar());
 
-        setContentView(root);
+        setContentView(rootLayout);
+        startClock();
     }
 
     private View buildStatusBar() {
         FrameLayout bar = new FrameLayout(this);
-        bar.setPadding(dp(16), 0, dp(16), 0);
-        bar.setBackgroundColor(SURFACE);
+        statusBarView = bar;
+        bar.setPadding(dp(22), 0, dp(20), 0);
+        bar.setBackgroundColor(ZINC_950);
 
-        TextView time = text("9:30", 14, ON_SURFACE, Typeface.NORMAL);
+        timeLabel = text("9:30", 14, ZINC_100, Typeface.BOLD);
+        timeLabel.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         FrameLayout.LayoutParams timeParams = new FrameLayout.LayoutParams(
                 dp(128),
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.START | Gravity.CENTER_VERTICAL
         );
-        bar.addView(time, timeParams);
+        bar.addView(timeLabel, timeParams);
 
-        View punchHole = new View(this);
-        punchHole.setBackground(oval(Color.rgb(46, 46, 46)));
-        FrameLayout.LayoutParams holeParams = new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER);
-        bar.addView(punchHole, holeParams);
+        punchHoleView = new View(this);
+        punchHoleView.setBackground(oval(Color.argb(205, 39, 39, 42)));
+        punchHoleView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams holeParams = new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER);
+        bar.addView(punchHoleView, holeParams);
 
-        TextView icons = text("◢  ▰", 13, ON_SURFACE, Typeface.BOLD);
-        icons.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        statusIconsLabel = text("◢  ▰", 13, ZINC_100, Typeface.BOLD);
+        statusIconsLabel.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        statusIconsLabel.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(
                 dp(96),
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.END | Gravity.CENTER_VERTICAL
         );
-        bar.addView(icons, iconParams);
+        bar.addView(statusIconsLabel, iconParams);
 
         bar.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -252,201 +263,185 @@ public class MainActivity extends Activity {
     }
 
     private View buildAppBar() {
-        LinearLayout appBar = new LinearLayout(this);
-        appBar.setOrientation(LinearLayout.HORIZONTAL);
-        appBar.setGravity(Gravity.CENTER_VERTICAL);
-        appBar.setPadding(dp(4), dp(4), dp(4), 0);
-        appBar.setBackgroundColor(SURFACE);
+        appBarView = new LinearLayout(this);
+        appBarView.setOrientation(LinearLayout.HORIZONTAL);
+        appBarView.setGravity(Gravity.CENTER_VERTICAL);
+        appBarView.setPadding(dp(12), dp(4), dp(12), 0);
+        appBarView.setBackgroundColor(ZINC_950);
 
-        appBar.addView(appBarDot());
+        appLeadingLabel = appBarIcon("‹");
+        appLeadingLabel.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        appBarView.addView(appLeadingLabel);
 
-        TextView title = text("Flash Switch", 22, ON_SURFACE, Typeface.NORMAL);
-        appBar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        appTitleLabel = text("손전등", 22, ZINC_100, Typeface.BOLD);
+        appTitleLabel.setGravity(Gravity.CENTER);
+        appBarView.addView(appTitleLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        appBar.addView(appBarDot());
-        appBar.setLayoutParams(new LinearLayout.LayoutParams(
+        appTrailingLabel = appBarIcon("⋯");
+        appTrailingLabel.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        appBarView.addView(appTrailingLabel);
+        appBarView.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(60)
         ));
-        return appBar;
+        return appBarView;
     }
 
-    private View appBarDot() {
-        FrameLayout box = new FrameLayout(this);
-        View dot = new View(this);
-        dot.setAlpha(0.3f);
-        dot.setBackground(oval(ON_SURFACE_VARIANT));
-        box.addView(dot, new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
-        box.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
-        return box;
+    private TextView appBarIcon(String icon) {
+        TextView label = text(icon, 24, ZINC_100, Typeface.NORMAL);
+        label.setGravity(Gravity.CENTER);
+        label.setBackground(oval(Color.argb(18, 255, 255, 255)));
+        label.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
+        return label;
     }
 
     private View buildHeroCard() {
         heroCard = new LinearLayout(this);
         heroCard.setOrientation(LinearLayout.VERTICAL);
-        heroCard.setPadding(dp(14), dp(10), dp(14), dp(14));
-        heroCard.setBackground(roundRect(TWEAK_PANEL, dp(14), Color.argb(153, 255, 255, 255)));
-        heroCard.setElevation(dp(10));
-        heroCard.setClickable(true);
-        heroCard.setFocusable(true);
-        heroCard.setOnClickListener(view -> onToggleRequested());
-
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = text("Flash Tweaks", 12, TWEAK_TEXT, Typeface.BOLD);
-        TextView close = text("✕", 13, Color.argb(140, 41, 38, 27), Typeface.NORMAL);
-        close.setGravity(Gravity.CENTER);
-        close.setBackground(roundRect(Color.TRANSPARENT, dp(6), 0));
-        header.addView(title, new LinearLayout.LayoutParams(0, dp(32), 1f));
-        header.addView(close, new LinearLayout.LayoutParams(dp(28), dp(28)));
-        heroCard.addView(header, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-
-        heroCard.addView(tweakSectionLabel("TORCH"));
-
-        LinearLayout powerRow = new LinearLayout(this);
-        powerRow.setOrientation(LinearLayout.HORIZONTAL);
-        powerRow.setGravity(Gravity.CENTER_VERTICAL);
-        powerRow.setPadding(0, dp(5), 0, dp(5));
-        TextView powerLabel = text("Power", 15, TWEAK_TEXT, Typeface.NORMAL);
-        actionLabel = text("OFF", 11, Color.WHITE, Typeface.BOLD);
-        actionLabel.setGravity(Gravity.CENTER);
-        actionLabel.setPadding(dp(10), 0, dp(10), 0);
-        actionLabel.setBackground(roundRect(Color.argb(38, 0, 0, 0), dp(999), 0));
-        powerRow.addView(powerLabel, new LinearLayout.LayoutParams(0, dp(30), 1f));
-        powerRow.addView(actionLabel, new LinearLayout.LayoutParams(dp(52), dp(26)));
-        heroCard.addView(powerRow);
-
-        heroCard.addView(buildBrightnessSelector());
+        heroCard.setGravity(Gravity.CENTER_HORIZONTAL);
+        heroCard.setPadding(0, dp(8), 0, dp(8));
+        heroCard.setBackgroundColor(Color.TRANSPARENT);
+        heroCard.setClickable(false);
+        heroCard.setFocusable(false);
 
         flashToggleView = new FlashToggleView(this);
         flashToggleView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(dp(188), dp(188));
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(dp(280), dp(280));
         toggleParams.gravity = Gravity.CENTER_HORIZONTAL;
-        toggleParams.topMargin = dp(4);
+        toggleParams.topMargin = dp(18);
         heroCard.addView(flashToggleView, toggleParams);
 
-        heroCard.addView(tweakSectionLabel("STATUS"));
-
-        statusLabel = text("플래시 준비 중", 16, TWEAK_TEXT, Typeface.BOLD);
-        statusLabel.setGravity(Gravity.START);
+        statusLabel = text("플래시 준비 중", 30, ZINC_100, Typeface.BOLD);
+        statusLabel.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        statusParams.topMargin = dp(2);
+        statusParams.topMargin = dp(10);
         heroCard.addView(statusLabel, statusParams);
 
-        detailLabel = text("카메라 플래시를 확인하고 있어요.", 13, TWEAK_MUTED, Typeface.NORMAL);
-        detailLabel.setGravity(Gravity.START);
+        detailLabel = text("카메라 플래시를 확인하고 있어요.", 15, ZINC_500, Typeface.NORMAL);
+        detailLabel.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        detailParams.topMargin = dp(3);
+        detailParams.topMargin = dp(8);
         heroCard.addView(detailLabel, detailParams);
+
+        actionLabel = text("⏻", 34, ZINC_950, Typeface.BOLD);
+        actionLabel.setGravity(Gravity.CENTER);
+        actionLabel.setClickable(true);
+        actionLabel.setFocusable(true);
+        actionLabel.setOnClickListener(view -> onToggleRequested());
+        actionLabel.setBackground(oval(Color.WHITE));
+        actionLabel.setElevation(dp(12));
+        LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(dp(92), dp(92));
+        actionParams.gravity = Gravity.CENTER_HORIZONTAL;
+        actionParams.topMargin = dp(34);
+        heroCard.addView(actionLabel, actionParams);
+
+        heroCard.addView(buildBrightnessSelector());
 
         LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        cardParams.bottomMargin = dp(14);
+        cardParams.bottomMargin = dp(18);
         heroCard.setLayoutParams(cardParams);
         return heroCard;
     }
 
     private View buildStatusCard() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
-        card.setBackground(roundRect(TWEAK_PANEL, dp(14), Color.argb(153, 255, 255, 255)));
-        card.setElevation(dp(6));
+        statusCard = new LinearLayout(this);
+        statusCard.setOrientation(LinearLayout.VERTICAL);
+        statusCard.setPadding(dp(16), dp(14), dp(16), dp(14));
+        statusCard.setBackground(roundRect(Color.argb(18, 255, 255, 255), dp(22), Color.argb(20, 255, 255, 255)));
+        statusCard.setElevation(dp(2));
 
-        card.addView(tweakSectionLabel("DEVICE"));
+        statusCard.addView(tweakSectionLabel("DEVICE"));
 
-        permissionChip = text("권한 확인 중", 14, TWEAK_TEXT, Typeface.NORMAL);
+        permissionChip = text("권한 확인 중", 14, ZINC_100, Typeface.BOLD);
         LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
         chipParams.topMargin = dp(4);
-        card.addView(permissionChip, chipParams);
+        statusCard.addView(permissionChip, chipParams);
 
-        capabilityLabel = text("토치 기능을 확인하고 있어요", 12, TWEAK_MUTED, Typeface.NORMAL);
+        capabilityLabel = text("토치 기능을 확인하고 있어요", 12, ZINC_500, Typeface.NORMAL);
         LinearLayout.LayoutParams capabilityParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
         capabilityParams.topMargin = dp(4);
-        card.addView(capabilityLabel, capabilityParams);
+        statusCard.addView(capabilityLabel, capabilityParams);
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
         params.bottomMargin = dp(12);
-        card.setLayoutParams(params);
-        return card;
+        statusCard.setLayoutParams(params);
+        return statusCard;
     }
 
     private View buildInfoCard() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
-        card.setBackground(roundRect(TWEAK_PANEL, dp(14), Color.argb(153, 255, 255, 255)));
-        card.setElevation(dp(6));
+        infoCard = new LinearLayout(this);
+        infoCard.setOrientation(LinearLayout.VERTICAL);
+        infoCard.setPadding(dp(16), dp(14), dp(16), dp(14));
+        infoCard.setBackground(roundRect(Color.argb(18, 255, 255, 255), dp(22), Color.argb(20, 255, 255, 255)));
+        infoCard.setElevation(dp(2));
 
-        card.addView(tweakSectionLabel("SAFETY"));
+        infoCard.addView(tweakSectionLabel("SAFETY"));
 
-        keepAwakeLabel = text("화면 유지 · 꺼짐", 12, TWEAK_MUTED, Typeface.NORMAL);
-        feedbackLabel = text("햅틱 피드백 · 준비됨", 12, TWEAK_MUTED, Typeface.NORMAL);
+        keepAwakeLabel = text("화면 유지 · 꺼짐", 12, ZINC_500, Typeface.NORMAL);
+        feedbackLabel = text("햅틱 피드백 · 준비됨", 12, ZINC_500, Typeface.NORMAL);
 
-        card.addView(featureRow("◐", "토치가 켜져 있을 때 화면을 계속 밝게 유지", keepAwakeLabel));
-        card.addView(featureRow("•", "탭과 오류 상태를 촉감으로 알려줌", feedbackLabel));
+        infoCard.addView(featureRow("◐", "토치가 켜져 있을 때 화면을 계속 밝게 유지", keepAwakeLabel));
+        infoCard.addView(featureRow("•", "탭과 오류 상태를 촉감으로 알려줌", feedbackLabel));
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        card.setLayoutParams(params);
-        return card;
+        infoCard.setLayoutParams(params);
+        return infoCard;
     }
 
     private View buildBrightnessSelector() {
         LinearLayout group = new LinearLayout(this);
         group.setOrientation(LinearLayout.VERTICAL);
-        group.setPadding(0, dp(4), 0, dp(6));
+        group.setPadding(0, dp(28), 0, dp(2));
 
-        TextView label = text("Brightness", 13, TWEAK_TEXT, Typeface.NORMAL);
-        group.addView(label, new LinearLayout.LayoutParams(
+        brightnessTitleLabel = text("밝기", 13, ZINC_500, Typeface.BOLD);
+        brightnessTitleLabel.setGravity(Gravity.CENTER);
+        group.addView(brightnessTitleLabel, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(24)
         ));
 
-        LinearLayout chips = new LinearLayout(this);
-        chips.setOrientation(LinearLayout.HORIZONTAL);
-        chips.setPadding(dp(2), dp(2), dp(2), dp(2));
-        chips.setBackground(roundRect(Color.argb(15, 0, 0, 0), dp(8), 0));
+        brightnessChipsGroup = new LinearLayout(this);
+        brightnessChipsGroup.setOrientation(LinearLayout.HORIZONTAL);
+        brightnessChipsGroup.setPadding(dp(4), dp(4), dp(4), dp(4));
+        brightnessChipsGroup.setBackground(roundRect(Color.argb(18, 255, 255, 255), dp(999), Color.argb(18, 255, 255, 255)));
 
         brightnessLowChip = brightnessChip("약", 0);
         brightnessMidChip = brightnessChip("중", 1);
         brightnessHighChip = brightnessChip("강", 2);
-        chips.addView(brightnessLowChip, new LinearLayout.LayoutParams(0, dp(28), 1f));
-        chips.addView(brightnessMidChip, new LinearLayout.LayoutParams(0, dp(28), 1f));
-        chips.addView(brightnessHighChip, new LinearLayout.LayoutParams(0, dp(28), 1f));
+        brightnessChipsGroup.addView(brightnessLowChip, new LinearLayout.LayoutParams(0, dp(36), 1f));
+        brightnessChipsGroup.addView(brightnessMidChip, new LinearLayout.LayoutParams(0, dp(36), 1f));
+        brightnessChipsGroup.addView(brightnessHighChip, new LinearLayout.LayoutParams(0, dp(36), 1f));
 
-        group.addView(chips, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
+        LinearLayout.LayoutParams chipGroupParams = new LinearLayout.LayoutParams(dp(190), ViewGroup.LayoutParams.WRAP_CONTENT);
+        chipGroupParams.gravity = Gravity.CENTER_HORIZONTAL;
+        chipGroupParams.topMargin = dp(6);
+        group.addView(brightnessChipsGroup, chipGroupParams);
         return group;
     }
 
     private TextView brightnessChip(String label, int preset) {
-        TextView chip = text(label, 12, TWEAK_TEXT, Typeface.BOLD);
+        TextView chip = text(label, 12, ZINC_100, Typeface.BOLD);
         chip.setGravity(Gravity.CENTER);
         chip.setClickable(true);
         chip.setFocusable(true);
@@ -460,15 +455,15 @@ public class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(12), 0, 0);
 
-        TextView leading = text(icon, 15, Color.WHITE, Typeface.BOLD);
+        TextView leading = text(icon, 15, ZINC_950, Typeface.BOLD);
         leading.setGravity(Gravity.CENTER);
-        leading.setBackground(oval(SYSTEM_GREEN));
+        leading.setBackground(oval(BULB_YELLOW));
         row.addView(leading, new LinearLayout.LayoutParams(dp(28), dp(28)));
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setPadding(dp(12), 0, 0, 0);
-        TextView description = text(descriptionText, 13, TWEAK_TEXT, Typeface.NORMAL);
+        TextView description = text(descriptionText, 13, ZINC_100, Typeface.NORMAL);
         copy.addView(description);
         copy.addView(valueLabel);
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -476,7 +471,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView tweakSectionLabel(String value) {
-        TextView label = text(value, 10, Color.argb(115, 41, 38, 27), Typeface.BOLD);
+        TextView label = text(value, 10, ZINC_500, Typeface.BOLD);
         label.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         label.setLetterSpacing(0.06f);
         label.setPadding(0, dp(10), 0, 0);
@@ -485,10 +480,11 @@ public class MainActivity extends Activity {
 
     private View buildGestureBar() {
         FrameLayout nav = new FrameLayout(this);
-        View pill = new View(this);
-        pill.setAlpha(0.4f);
-        pill.setBackground(roundRect(ON_SURFACE, dp(2), 0));
-        nav.addView(pill, new FrameLayout.LayoutParams(dp(108), dp(4), Gravity.CENTER));
+        gesturePillView = new View(this);
+        gesturePillView.setAlpha(0.4f);
+        gesturePillView.setBackground(roundRect(ZINC_100, dp(2), 0));
+        gesturePillView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        nav.addView(gesturePillView, new FrameLayout.LayoutParams(dp(108), dp(4), Gravity.CENTER));
         nav.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(24)
@@ -657,27 +653,27 @@ public class MainActivity extends Activity {
         String defaultStatus;
         String defaultDetail;
         if (!hasFlash || torchCameraId == null) {
-            defaultStatus = "플래시가 없어요";
+            defaultStatus = "사용 불가";
             defaultDetail = "이 기기에서는 후면 플래시를 찾지 못했어요.";
-            actionLabel.setText("N/A");
+            actionLabel.setText("!");
             permissionChip.setText("플래시 하드웨어 없음");
             capabilityLabel.setText("사용 가능한 카메라 플래시를 찾지 못했습니다.");
         } else if (permissionNeeded) {
-            defaultStatus = "카메라 권한이 필요해요";
+            defaultStatus = "권한 필요";
             defaultDetail = "권한을 허용하면 바로 플래시를 켤 수 있어요.";
-            actionLabel.setText("ALLOW");
+            actionLabel.setText("⏻");
             permissionChip.setText("카메라 권한 필요");
             capabilityLabel.setText(torchCapabilityText());
         } else if (isTorchOn) {
-            defaultStatus = "플래시 켜짐";
+            defaultStatus = "켜짐";
             defaultDetail = "주변을 밝히는 중이에요. 탭하면 꺼집니다.";
-            actionLabel.setText("ON");
+            actionLabel.setText("⏻");
             permissionChip.setText("권한 허용됨 · 토치 켜짐");
             capabilityLabel.setText(torchCapabilityText());
         } else {
-            defaultStatus = "플래시 꺼짐";
-            defaultDetail = "둥근 스위치를 탭하면 토치가 켜집니다.";
-            actionLabel.setText("OFF");
+            defaultStatus = "꺼짐";
+            defaultDetail = "전원 버튼을 탭하면 손전등이 켜집니다.";
+            actionLabel.setText("⏻");
             permissionChip.setText("권한 허용됨 · 대기 중");
             capabilityLabel.setText(torchCapabilityText());
         }
@@ -687,14 +683,92 @@ public class MainActivity extends Activity {
                 detailOverride != null ? detailOverride : defaultDetail
         );
 
-        heroCard.setBackground(roundRect(TWEAK_PANEL, dp(14), Color.argb(153, 255, 255, 255)));
-        actionLabel.setBackground(roundRect(isTorchOn ? SYSTEM_GREEN : Color.argb(38, 0, 0, 0), dp(999), 0));
+        applyVisualState(isTorchOn, permissionNeeded);
         flashToggleView.setFlashState(isTorchOn, hasFlash && torchCameraId != null, permissionNeeded);
         updateBrightnessChips();
         updateKeepScreenOn();
         updateAccessibility();
         keepAwakeLabel.setText(isTorchOn ? "화면 유지 · 켜짐" : "화면 유지 · 꺼짐");
         feedbackLabel.setText("햅틱 피드백 · " + (isTorchOn ? "켜짐 확인" : "탭 준비"));
+    }
+
+    private void applyVisualState(boolean on, boolean permissionNeeded) {
+        int background = on ? Color.WHITE : ZINC_950;
+        int primaryText = on ? ZINC_800 : ZINC_100;
+        int mutedText = on ? ZINC_500 : ZINC_500;
+        int cardBackground = on ? Color.argb(18, 0, 0, 0) : Color.argb(18, 255, 255, 255);
+        int cardStroke = on ? Color.argb(20, 0, 0, 0) : Color.argb(20, 255, 255, 255);
+
+        rootLayout.setBackgroundColor(background);
+        statusBarView.setBackgroundColor(background);
+        appBarView.setBackgroundColor(background);
+        heroCard.setBackgroundColor(Color.TRANSPARENT);
+        statusCard.setBackground(roundRect(cardBackground, dp(22), cardStroke));
+        infoCard.setBackground(roundRect(cardBackground, dp(22), cardStroke));
+        applySystemBars(on);
+
+        timeLabel.setTextColor(primaryText);
+        statusIconsLabel.setTextColor(primaryText);
+        appTitleLabel.setTextColor(primaryText);
+        appLeadingLabel.setTextColor(primaryText);
+        appTrailingLabel.setTextColor(primaryText);
+        appLeadingLabel.setBackground(oval(on ? Color.argb(8, 0, 0, 0) : Color.argb(18, 255, 255, 255)));
+        appTrailingLabel.setBackground(oval(on ? Color.argb(8, 0, 0, 0) : Color.argb(18, 255, 255, 255)));
+        punchHoleView.setBackground(oval(on ? ZINC_200 : Color.argb(205, 39, 39, 42)));
+        gesturePillView.setBackground(roundRect(on ? ZINC_800 : ZINC_100, dp(2), 0));
+
+        statusLabel.setTextColor(primaryText);
+        detailLabel.setTextColor(mutedText);
+        permissionChip.setTextColor(primaryText);
+        capabilityLabel.setTextColor(mutedText);
+        keepAwakeLabel.setTextColor(mutedText);
+        feedbackLabel.setTextColor(mutedText);
+        brightnessTitleLabel.setTextColor(mutedText);
+        brightnessChipsGroup.setBackground(roundRect(cardBackground, dp(999), cardStroke));
+
+        if (!hasFlash || torchCameraId == null || permissionNeeded) {
+            actionLabel.setTextColor(on ? ZINC_800 : ZINC_950);
+            actionLabel.setBackground(oval(Color.argb(230, 244, 244, 245)));
+        } else if (on) {
+            actionLabel.setTextColor(BULB_AMBER);
+            actionLabel.setBackground(oval(ZINC_900));
+        } else {
+            actionLabel.setTextColor(ZINC_950);
+            actionLabel.setBackground(oval(Color.WHITE));
+        }
+    }
+
+    private void applySystemBars(boolean lightSurface) {
+        Window window = getWindow();
+        int color = lightSurface ? Color.WHITE : ZINC_950;
+        window.setStatusBarColor(color);
+        window.setNavigationBarColor(color);
+
+        int flags = lightSurface ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR : 0;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && lightSurface) {
+            flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
+        window.getDecorView().setSystemUiVisibility(flags);
+    }
+
+    private void startClock() {
+        updateClock();
+        clockRunnable = new Runnable() {
+            @Override
+            public void run() {
+                updateClock();
+                mainHandler.postDelayed(this, 60_000L);
+            }
+        };
+        mainHandler.postDelayed(clockRunnable, 60_000L);
+    }
+
+    private void updateClock() {
+        if (timeLabel == null) {
+            return;
+        }
+        String time = new SimpleDateFormat("H:mm", Locale.KOREA).format(new Date());
+        timeLabel.setText(time);
     }
 
     private void showStatus(String status, String detail) {
@@ -796,11 +870,25 @@ public class MainActivity extends Activity {
     }
 
     private void styleBrightnessChip(TextView chip, boolean selected, boolean enabled) {
-        int background = selected && enabled ? Color.WHITE : Color.TRANSPARENT;
-        int textColor = enabled ? TWEAK_TEXT : Color.argb(95, 41, 38, 27);
+        int background;
+        if (selected && enabled) {
+            background = isTorchOn ? ZINC_900 : Color.WHITE;
+        } else {
+            background = Color.TRANSPARENT;
+        }
+        int textColor;
+        if (!enabled) {
+            textColor = Color.argb(120, 113, 113, 122);
+        } else if (selected && isTorchOn) {
+            textColor = BULB_YELLOW;
+        } else if (selected) {
+            textColor = ZINC_950;
+        } else {
+            textColor = isTorchOn ? ZINC_700 : ZINC_100;
+        }
         chip.setTextColor(textColor);
         chip.setAlpha(enabled ? 1f : 0.55f);
-        chip.setBackground(roundRect(background, dp(6), selected && enabled ? TWEAK_RULE : 0));
+        chip.setBackground(roundRect(background, dp(999), selected && enabled ? Color.argb(34, 250, 204, 21) : 0));
         chip.setEnabled(enabled);
     }
 
@@ -847,11 +935,20 @@ public class MainActivity extends Activity {
     private void updateAccessibility() {
         String state = statusLabel.getText().toString();
         String detail = detailLabel.getText().toString();
-        String action = actionLabel.getText().toString();
-        String description = state + ". " + detail + " " + action;
-        heroCard.setContentDescription(description);
+        String action = actionAccessibilityLabel();
+        heroCard.setContentDescription(state + ". " + detail);
         actionLabel.setContentDescription(action);
         permissionChip.setContentDescription("상태: " + permissionChip.getText());
+    }
+
+    private String actionAccessibilityLabel() {
+        if (!hasFlash || torchCameraId == null) {
+            return "플래시 사용 불가";
+        }
+        if (!hasCameraPermission()) {
+            return "카메라 권한 요청";
+        }
+        return isTorchOn ? "손전등 끄기" : "손전등 켜기";
     }
 
     private void performToggleHaptic() {
@@ -904,7 +1001,6 @@ public class MainActivity extends Activity {
     private class FlashToggleView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
-        private final RectF rect = new RectF();
 
         private boolean on;
         private boolean available;
@@ -932,151 +1028,99 @@ public class MainActivity extends Activity {
             float width = getWidth();
             float height = getHeight();
             float centerX = width / 2f;
-            float centerY = height * 0.43f;
-            float radius = Math.min(width, height) * 0.34f;
+            float centerY = height * 0.5f - dp(10) * progress;
+            float radius = Math.min(width, height) * (0.31f + 0.02f * progress);
             float active = available && !permissionNeeded ? progress : 0f;
 
             drawGlow(canvas, centerX, centerY, radius, active);
-            drawMainButton(canvas, centerX, centerY, radius, active);
-            drawBeam(canvas, centerX, centerY, radius, active);
-            drawFlashIcon(canvas, centerX, centerY, radius, active);
-            drawStateDots(canvas, centerX, centerY, radius, active);
-            drawSwitch(canvas, centerX, height * 0.83f, width * 0.44f, height * 0.16f, active);
+            drawLightRays(canvas, centerX, centerY, radius, active);
+            drawBulb(canvas, centerX, centerY, radius, active);
         }
 
         private void drawGlow(Canvas canvas, float centerX, float centerY, float radius, float active) {
             if (active <= 0f) {
                 paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(dp(1));
-                paint.setColor(Color.argb(42, 0, 106, 96));
-                canvas.drawCircle(centerX, centerY, radius * 1.12f, paint);
+                paint.setStrokeWidth(dp(2));
+                paint.setColor(available ? Color.argb(34, 244, 244, 245) : Color.argb(24, 113, 113, 122));
+                canvas.drawCircle(centerX, centerY, radius * 1.06f, paint);
                 return;
             }
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.argb(Math.round(64 * active), 131, 213, 198));
-            paint.setShadowLayer(dp(24), 0f, dp(6), Color.argb(Math.round(90 * active), 0, 106, 96));
-            canvas.drawCircle(centerX, centerY, radius * (1.17f + 0.05f * active), paint);
+            paint.setColor(Color.argb(Math.round(72 * active), 250, 204, 21));
+            paint.setShadowLayer(dp(42), 0f, 0f, Color.argb(Math.round(150 * active), 250, 204, 21));
+            canvas.drawCircle(centerX, centerY, radius * (1.34f + 0.07f * active), paint);
             paint.clearShadowLayer();
 
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(2));
-            paint.setColor(Color.argb(Math.round(90 * active), 0, 106, 96));
-            canvas.drawCircle(centerX, centerY, radius * 1.32f, paint);
-        }
-
-        private void drawMainButton(Canvas canvas, float centerX, float centerY, float radius, float active) {
-            int disabledColor = permissionNeeded ? SECONDARY_CONTAINER : SURFACE_VARIANT;
-            int buttonColor = blend(disabledColor, PRIMARY_FIXED_DIM, active);
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(buttonColor);
-            paint.setShadowLayer(dp(18), 0f, dp(8), Color.argb(42, 0, 0, 0));
-            canvas.drawCircle(centerX, centerY, radius, paint);
-            paint.clearShadowLayer();
-
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(2));
-            paint.setColor(Color.argb(120, 255, 255, 255));
-            canvas.drawCircle(centerX, centerY, radius - dp(4), paint);
-
-            paint.setStrokeWidth(dp(1));
-            paint.setColor(Color.argb(70, 0, 32, 28));
-            canvas.drawCircle(centerX, centerY, radius + dp(1), paint);
+            paint.setColor(Color.argb(Math.round(44 * active), 245, 158, 11));
+            canvas.drawCircle(centerX, centerY, radius * 1.02f, paint);
         }
 
-        private void drawBeam(Canvas canvas, float centerX, float centerY, float radius, float active) {
+        private void drawBulb(Canvas canvas, float centerX, float centerY, float radius, float active) {
+            float unit = radius / 100f;
+            float globeRadius = 44f * unit;
+            float globeCenterY = centerY - 16f * unit;
+            int bulbColor = available ? blend(ZINC_700, BULB_YELLOW, active) : Color.argb(120, 113, 113, 122);
+            int innerColor = available ? blend(Color.argb(46, 244, 244, 245), Color.argb(180, 254, 240, 138), active) : Color.argb(28, 113, 113, 122);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(innerColor);
+            canvas.drawCircle(centerX, globeCenterY, globeRadius * 0.86f, paint);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setStrokeWidth(9f * unit);
+            paint.setColor(bulbColor);
+            paint.setShadowLayer(active > 0f ? dp(12) : 0f, 0f, 0f, Color.argb(Math.round(130 * active), 250, 204, 21));
+            canvas.drawCircle(centerX, globeCenterY, globeRadius, paint);
+            paint.clearShadowLayer();
+
+            paint.setStrokeWidth(7f * unit);
+            path.reset();
+            path.moveTo(centerX - 19f * unit, centerY + 18f * unit);
+            path.cubicTo(centerX - 10f * unit, centerY + 28f * unit, centerX + 10f * unit, centerY + 28f * unit, centerX + 19f * unit, centerY + 18f * unit);
+            canvas.drawPath(path, paint);
+
+            paint.setStrokeWidth(8f * unit);
+            canvas.drawLine(centerX - 23f * unit, centerY + 39f * unit, centerX + 23f * unit, centerY + 39f * unit, paint);
+            canvas.drawLine(centerX - 18f * unit, centerY + 55f * unit, centerX + 18f * unit, centerY + 55f * unit, paint);
+            canvas.drawLine(centerX - 10f * unit, centerY + 70f * unit, centerX + 10f * unit, centerY + 70f * unit, paint);
+
+            paint.setStrokeWidth(5f * unit);
+            paint.setColor(blend(Color.argb(120, 212, 212, 216), Color.rgb(146, 64, 14), active));
+            canvas.drawLine(centerX - 15f * unit, centerY - 14f * unit, centerX - 1f * unit, centerY + 8f * unit, paint);
+            canvas.drawLine(centerX + 15f * unit, centerY - 14f * unit, centerX + 1f * unit, centerY + 8f * unit, paint);
+
+            if (active < 0.5f || !available || permissionNeeded) {
+                paint.setStrokeWidth(8f * unit);
+                paint.setColor(permissionNeeded ? BULB_AMBER : Color.argb(210, 113, 113, 122));
+                canvas.drawLine(centerX - 58f * unit, centerY + 62f * unit, centerX + 58f * unit, centerY - 58f * unit, paint);
+            }
+            paint.setStrokeCap(Paint.Cap.BUTT);
+        }
+
+        private void drawLightRays(Canvas canvas, float centerX, float centerY, float radius, float active) {
             if (active <= 0f) {
                 return;
             }
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.argb(Math.round(54 * active), 255, 255, 255));
-            path.reset();
-            path.moveTo(centerX - radius * 0.34f, centerY - radius * 0.72f);
-            path.lineTo(centerX + radius * 0.34f, centerY - radius * 0.72f);
-            path.lineTo(centerX + radius * 0.72f, centerY + radius * 0.64f);
-            path.lineTo(centerX - radius * 0.72f, centerY + radius * 0.64f);
-            path.close();
-            canvas.drawPath(path, paint);
-        }
+            float unit = radius / 100f;
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeWidth(6f * unit);
+            paint.setColor(Color.argb(Math.round(190 * active), 250, 204, 21));
 
-        private void drawFlashIcon(Canvas canvas, float centerX, float centerY, float radius, float active) {
-            int bodyColor = available ? blend(ON_SURFACE_VARIANT, PRIMARY, active) : Color.argb(120, 73, 69, 79);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(bodyColor);
-
-            float unit = radius / 64f;
-            rect.set(centerX - 17f * unit, centerY - 38f * unit, centerX + 17f * unit, centerY - 19f * unit);
-            canvas.drawRoundRect(rect, 6f * unit, 6f * unit, paint);
-
-            path.reset();
-            path.moveTo(centerX - 13f * unit, centerY - 16f * unit);
-            path.lineTo(centerX + 13f * unit, centerY - 16f * unit);
-            path.lineTo(centerX + 8f * unit, centerY + 10f * unit);
-            path.lineTo(centerX + 2f * unit, centerY + 18f * unit);
-            path.lineTo(centerX + 2f * unit, centerY + 37f * unit);
-            path.lineTo(centerX - 2f * unit, centerY + 37f * unit);
-            path.lineTo(centerX - 2f * unit, centerY + 18f * unit);
-            path.lineTo(centerX - 8f * unit, centerY + 10f * unit);
-            path.close();
-            canvas.drawPath(path, paint);
-
-            paint.setColor(blend(Color.WHITE, ON_PRIMARY_CONTAINER, active * 0.35f));
-            path.reset();
-            path.moveTo(centerX - 2f * unit, centerY - 8f * unit);
-            path.lineTo(centerX + 9f * unit, centerY - 8f * unit);
-            path.lineTo(centerX + 1f * unit, centerY + 6f * unit);
-            path.lineTo(centerX + 10f * unit, centerY + 6f * unit);
-            path.lineTo(centerX - 8f * unit, centerY + 27f * unit);
-            path.lineTo(centerX - 3f * unit, centerY + 11f * unit);
-            path.lineTo(centerX - 12f * unit, centerY + 11f * unit);
-            path.close();
-            canvas.drawPath(path, paint);
-
-            if (!available || permissionNeeded) {
-                paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeCap(Paint.Cap.ROUND);
-                paint.setStrokeWidth(5f * unit);
-                paint.setColor(permissionNeeded ? PRIMARY : ON_SURFACE_VARIANT);
-                canvas.drawLine(centerX - 28f * unit, centerY + 30f * unit, centerX + 28f * unit, centerY - 30f * unit, paint);
-                paint.setStrokeCap(Paint.Cap.BUTT);
+            for (int index = 0; index < 8; index++) {
+                double angle = Math.toRadians(index * 45.0 - 90.0);
+                float inner = radius * 0.76f;
+                float outer = radius * 1.02f;
+                float startX = centerX + (float) Math.cos(angle) * inner;
+                float startY = centerY + (float) Math.sin(angle) * inner;
+                float endX = centerX + (float) Math.cos(angle) * outer;
+                float endY = centerY + (float) Math.sin(angle) * outer;
+                canvas.drawLine(startX, startY, endX, endY, paint);
             }
-        }
-
-        private void drawStateDots(Canvas canvas, float centerX, float centerY, float radius, float active) {
-            float dotY = centerY + radius * 0.72f;
-            float gap = radius * 0.2f;
-            paint.setStyle(Paint.Style.FILL);
-            for (int index = -1; index <= 1; index++) {
-                float emphasis = index == 0 ? 1f : 0.45f;
-                int color = blend(SURFACE_VARIANT, SYSTEM_GREEN, active * emphasis);
-                paint.setColor(color);
-                canvas.drawCircle(centerX + gap * index, dotY, dp(index == 0 ? 3.5f : 2.5f), paint);
-            }
-        }
-
-        private void drawSwitch(Canvas canvas, float centerX, float centerY, float switchWidth, float switchHeight, float active) {
-            float left = centerX - switchWidth / 2f;
-            float top = centerY - switchHeight / 2f;
-            float right = centerX + switchWidth / 2f;
-            float bottom = centerY + switchHeight / 2f;
-            float radius = switchHeight / 2f;
-
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(blend(Color.argb(38, 0, 0, 0), SYSTEM_GREEN, active));
-            rect.set(left, top, right, bottom);
-            canvas.drawRoundRect(rect, radius, radius, paint);
-
-            paint.setTextSize(dp(9));
-            paint.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD));
-            paint.setTextAlign(Paint.Align.CENTER);
-            paint.setColor(blend(ON_SURFACE_VARIANT, Color.WHITE, active));
-            canvas.drawText(active > 0.5f ? "ON" : "OFF", centerX, centerY + dp(3), paint);
-
-            float thumbRadius = switchHeight * 0.38f;
-            float thumbX = left + radius + (switchWidth - switchHeight) * active;
-            paint.setColor(Color.WHITE);
-            paint.setShadowLayer(dp(3), 0f, dp(1), Color.argb(70, 0, 0, 0));
-            canvas.drawCircle(thumbX, centerY, thumbRadius, paint);
-            paint.clearShadowLayer();
+            paint.setStrokeCap(Paint.Cap.BUTT);
         }
 
         private void animateTo(float target, boolean animated) {

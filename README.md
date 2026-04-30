@@ -1,6 +1,6 @@
 # Flash Switch
 
-Native Android flashlight app built from the Material 3-style Android frame/toggle design in this folder.
+Native Android flashlight app with a React/Tailwind-inspired design: dark zinc off state, white on state, Korean `손전등` app bar, yellow bulb glow, circular power button, and Android-friendly APK build setup.
 
 ## Build locally
 
