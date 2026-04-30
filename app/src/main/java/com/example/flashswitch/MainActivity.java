@@ -45,6 +45,11 @@ public class MainActivity extends Activity {
     private static final int PRIMARY = Color.rgb(0, 106, 96);
     private static final int SURFACE_CONTAINER_LOW = Color.rgb(239, 247, 243);
     private static final int OUTLINE_VARIANT = Color.argb(66, 116, 119, 117);
+    private static final int TWEAK_PANEL = Color.argb(224, 250, 249, 247);
+    private static final int TWEAK_TEXT = Color.rgb(41, 38, 27);
+    private static final int TWEAK_MUTED = Color.argb(184, 41, 38, 27);
+    private static final int TWEAK_RULE = Color.argb(38, 0, 0, 0);
+    private static final int SYSTEM_GREEN = Color.rgb(52, 199, 89);
 
     private CameraManager cameraManager;
     private Handler mainHandler;
@@ -191,7 +196,7 @@ public class MainActivity extends Activity {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setGravity(Gravity.CENTER_HORIZONTAL);
-        content.setPadding(dp(24), dp(22), dp(24), dp(12));
+        content.setPadding(dp(18), dp(20), dp(18), dp(12));
         root.addView(content, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
@@ -276,9 +281,9 @@ public class MainActivity extends Activity {
     private View buildHeroCard() {
         heroCard = new LinearLayout(this);
         heroCard.setOrientation(LinearLayout.VERTICAL);
-        heroCard.setGravity(Gravity.CENTER_HORIZONTAL);
-        heroCard.setPadding(dp(20), dp(24), dp(20), dp(18));
-        heroCard.setBackground(roundRect(INVERSE_ON_SURFACE, dp(32), OUTLINE_VARIANT));
+        heroCard.setPadding(dp(14), dp(10), dp(14), dp(14));
+        heroCard.setBackground(roundRect(TWEAK_PANEL, dp(14), Color.argb(153, 255, 255, 255)));
+        heroCard.setElevation(dp(10));
         heroCard.setClickable(true);
         heroCard.setFocusable(true);
         heroCard.setOnClickListener(view -> onToggleRequested());
@@ -287,50 +292,61 @@ public class MainActivity extends Activity {
             return true;
         });
 
-        TextView eyebrow = text("MATERIAL TORCH", 12, PRIMARY, Typeface.BOLD);
-        eyebrow.setGravity(Gravity.CENTER);
-        eyebrow.setLetterSpacing(0.12f);
-        eyebrow.setPadding(dp(14), 0, dp(14), 0);
-        eyebrow.setBackground(roundRect(SECONDARY_CONTAINER, dp(100), 0));
-        LinearLayout.LayoutParams eyebrowParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                dp(32)
-        );
-        eyebrowParams.bottomMargin = dp(10);
-        heroCard.addView(eyebrow, eyebrowParams);
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = text("Flash Tweaks", 12, TWEAK_TEXT, Typeface.BOLD);
+        TextView close = text("✕", 13, Color.argb(140, 41, 38, 27), Typeface.NORMAL);
+        close.setGravity(Gravity.CENTER);
+        close.setBackground(roundRect(Color.TRANSPARENT, dp(6), 0));
+        header.addView(title, new LinearLayout.LayoutParams(0, dp(32), 1f));
+        header.addView(close, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        heroCard.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        heroCard.addView(tweakSectionLabel("TORCH"));
+
+        LinearLayout powerRow = new LinearLayout(this);
+        powerRow.setOrientation(LinearLayout.HORIZONTAL);
+        powerRow.setGravity(Gravity.CENTER_VERTICAL);
+        powerRow.setPadding(0, dp(5), 0, dp(5));
+        TextView powerLabel = text("Power", 15, TWEAK_TEXT, Typeface.NORMAL);
+        actionLabel = text("OFF", 11, Color.WHITE, Typeface.BOLD);
+        actionLabel.setGravity(Gravity.CENTER);
+        actionLabel.setPadding(dp(10), 0, dp(10), 0);
+        actionLabel.setBackground(roundRect(Color.argb(38, 0, 0, 0), dp(999), 0));
+        powerRow.addView(powerLabel, new LinearLayout.LayoutParams(0, dp(30), 1f));
+        powerRow.addView(actionLabel, new LinearLayout.LayoutParams(dp(52), dp(26)));
+        heroCard.addView(powerRow);
 
         flashToggleView = new FlashToggleView(this);
         flashToggleView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        heroCard.addView(flashToggleView, new LinearLayout.LayoutParams(dp(252), dp(252)));
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(dp(188), dp(188));
+        toggleParams.gravity = Gravity.CENTER_HORIZONTAL;
+        toggleParams.topMargin = dp(4);
+        heroCard.addView(flashToggleView, toggleParams);
 
-        statusLabel = text("플래시 준비 중", 26, ON_SURFACE, Typeface.NORMAL);
-        statusLabel.setGravity(Gravity.CENTER);
+        heroCard.addView(tweakSectionLabel("STATUS"));
+
+        statusLabel = text("플래시 준비 중", 16, TWEAK_TEXT, Typeface.BOLD);
+        statusLabel.setGravity(Gravity.START);
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        statusParams.topMargin = dp(10);
+        statusParams.topMargin = dp(2);
         heroCard.addView(statusLabel, statusParams);
 
-        detailLabel = text("카메라 플래시를 확인하고 있어요.", 15, ON_SURFACE_VARIANT, Typeface.NORMAL);
-        detailLabel.setGravity(Gravity.CENTER);
+        detailLabel = text("카메라 플래시를 확인하고 있어요.", 13, TWEAK_MUTED, Typeface.NORMAL);
+        detailLabel.setGravity(Gravity.START);
         LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        detailParams.topMargin = dp(6);
+        detailParams.topMargin = dp(3);
         heroCard.addView(detailLabel, detailParams);
-
-        actionLabel = text("탭해서 켜기", 15, ON_PRIMARY_CONTAINER, Typeface.BOLD);
-        actionLabel.setGravity(Gravity.CENTER);
-        actionLabel.setPadding(dp(22), 0, dp(22), 0);
-        actionLabel.setBackground(roundRect(SECONDARY_CONTAINER, dp(100), 0));
-        LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                dp(44)
-        );
-        actionParams.topMargin = dp(18);
-        heroCard.addView(actionLabel, actionParams);
 
         LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -344,14 +360,13 @@ public class MainActivity extends Activity {
     private View buildStatusCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(18), dp(16), dp(18), dp(16));
-        card.setBackground(roundRect(SURFACE_CONTAINER_LOW, dp(24), OUTLINE_VARIANT));
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setBackground(roundRect(TWEAK_PANEL, dp(14), Color.argb(153, 255, 255, 255)));
+        card.setElevation(dp(6));
 
-        TextView title = text("현재 상태", 14, ON_SURFACE_VARIANT, Typeface.BOLD);
-        title.setLetterSpacing(0.04f);
-        card.addView(title);
+        card.addView(tweakSectionLabel("DEVICE"));
 
-        permissionChip = text("권한 확인 중", 18, ON_SURFACE, Typeface.NORMAL);
+        permissionChip = text("권한 확인 중", 14, TWEAK_TEXT, Typeface.NORMAL);
         LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -359,7 +374,7 @@ public class MainActivity extends Activity {
         chipParams.topMargin = dp(4);
         card.addView(permissionChip, chipParams);
 
-        capabilityLabel = text("토치 기능을 확인하고 있어요", 14, ON_SURFACE_VARIANT, Typeface.NORMAL);
+        capabilityLabel = text("토치 기능을 확인하고 있어요", 12, TWEAK_MUTED, Typeface.NORMAL);
         LinearLayout.LayoutParams capabilityParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -379,14 +394,14 @@ public class MainActivity extends Activity {
     private View buildInfoCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(14), dp(14), dp(14));
-        card.setBackground(roundRect(Color.WHITE, dp(24), OUTLINE_VARIANT));
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setBackground(roundRect(TWEAK_PANEL, dp(14), Color.argb(153, 255, 255, 255)));
+        card.setElevation(dp(6));
 
-        TextView headline = text("안심 사용 기능", 16, ON_SURFACE, Typeface.BOLD);
-        card.addView(headline);
+        card.addView(tweakSectionLabel("SAFETY"));
 
-        keepAwakeLabel = text("화면 유지 · 꺼짐", 14, ON_SURFACE_VARIANT, Typeface.NORMAL);
-        feedbackLabel = text("햅틱 피드백 · 준비됨", 14, ON_SURFACE_VARIANT, Typeface.NORMAL);
+        keepAwakeLabel = text("화면 유지 · 꺼짐", 12, TWEAK_MUTED, Typeface.NORMAL);
+        feedbackLabel = text("햅틱 피드백 · 준비됨", 12, TWEAK_MUTED, Typeface.NORMAL);
 
         card.addView(featureRow("◐", "토치가 켜져 있을 때 화면을 계속 밝게 유지", keepAwakeLabel));
         card.addView(featureRow("•", "탭과 오류 상태를 촉감으로 알려줌", feedbackLabel));
@@ -405,19 +420,27 @@ public class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(12), 0, 0);
 
-        TextView leading = text(icon, 18, Color.WHITE, Typeface.BOLD);
+        TextView leading = text(icon, 15, Color.WHITE, Typeface.BOLD);
         leading.setGravity(Gravity.CENTER);
-        leading.setBackground(oval(PRIMARY));
-        row.addView(leading, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        leading.setBackground(oval(SYSTEM_GREEN));
+        row.addView(leading, new LinearLayout.LayoutParams(dp(28), dp(28)));
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setPadding(dp(12), 0, 0, 0);
-        TextView description = text(descriptionText, 14, ON_SURFACE, Typeface.NORMAL);
+        TextView description = text(descriptionText, 13, TWEAK_TEXT, Typeface.NORMAL);
         copy.addView(description);
         copy.addView(valueLabel);
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         return row;
+    }
+
+    private TextView tweakSectionLabel(String value) {
+        TextView label = text(value, 10, Color.argb(115, 41, 38, 27), Typeface.BOLD);
+        label.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        label.setLetterSpacing(0.06f);
+        label.setPadding(0, dp(10), 0, 0);
+        return label;
     }
 
     private View buildGestureBar() {
@@ -575,25 +598,25 @@ public class MainActivity extends Activity {
         if (!hasFlash || torchCameraId == null) {
             defaultStatus = "플래시가 없어요";
             defaultDetail = "이 기기에서는 후면 플래시를 찾지 못했어요.";
-            actionLabel.setText("사용 불가");
+            actionLabel.setText("N/A");
             permissionChip.setText("플래시 하드웨어 없음");
             capabilityLabel.setText("사용 가능한 카메라 플래시를 찾지 못했습니다.");
         } else if (permissionNeeded) {
             defaultStatus = "카메라 권한이 필요해요";
             defaultDetail = "권한을 허용하면 바로 플래시를 켤 수 있어요.";
-            actionLabel.setText("권한 허용 후 켜기");
+            actionLabel.setText("ALLOW");
             permissionChip.setText("카메라 권한 필요");
             capabilityLabel.setText(torchCapabilityText());
         } else if (isTorchOn) {
             defaultStatus = "플래시 켜짐";
             defaultDetail = "주변을 밝히는 중이에요. 탭하면 꺼집니다.";
-            actionLabel.setText("탭해서 끄기");
+            actionLabel.setText("ON");
             permissionChip.setText("권한 허용됨 · 토치 켜짐");
             capabilityLabel.setText(torchCapabilityText());
         } else {
             defaultStatus = "플래시 꺼짐";
             defaultDetail = "둥근 스위치를 탭하면 토치가 켜집니다.";
-            actionLabel.setText("탭해서 켜기");
+            actionLabel.setText("OFF");
             permissionChip.setText("권한 허용됨 · 대기 중");
             capabilityLabel.setText(torchCapabilityText());
         }
@@ -603,8 +626,8 @@ public class MainActivity extends Activity {
                 detailOverride != null ? detailOverride : defaultDetail
         );
 
-        heroCard.setBackground(roundRect(isTorchOn ? SECONDARY_CONTAINER : INVERSE_ON_SURFACE, dp(32), OUTLINE_VARIANT));
-        actionLabel.setBackground(roundRect(isTorchOn ? PRIMARY_FIXED_DIM : SECONDARY_CONTAINER, dp(100), 0));
+        heroCard.setBackground(roundRect(TWEAK_PANEL, dp(14), Color.argb(153, 255, 255, 255)));
+        actionLabel.setBackground(roundRect(isTorchOn ? SYSTEM_GREEN : Color.argb(38, 0, 0, 0), dp(999), 0));
         flashToggleView.setFlashState(isTorchOn, hasFlash && torchCameraId != null, permissionNeeded);
         updateKeepScreenOn();
         updateAccessibility();
@@ -898,7 +921,7 @@ public class MainActivity extends Activity {
             paint.setStyle(Paint.Style.FILL);
             for (int index = -1; index <= 1; index++) {
                 float emphasis = index == 0 ? 1f : 0.45f;
-                int color = blend(SURFACE_VARIANT, PRIMARY, active * emphasis);
+                int color = blend(SURFACE_VARIANT, SYSTEM_GREEN, active * emphasis);
                 paint.setColor(color);
                 canvas.drawCircle(centerX + gap * index, dotY, dp(index == 0 ? 3.5f : 2.5f), paint);
             }
@@ -912,7 +935,7 @@ public class MainActivity extends Activity {
             float radius = switchHeight / 2f;
 
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(blend(Color.argb(38, 0, 0, 0), PRIMARY, active));
+            paint.setColor(blend(Color.argb(38, 0, 0, 0), SYSTEM_GREEN, active));
             rect.set(left, top, right, bottom);
             canvas.drawRoundRect(rect, radius, radius, paint);
 
