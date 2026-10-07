@@ -468,10 +468,14 @@
   }
 
   function writer(p) {
+    const nick = p.nick || L.defaultNick;
+    if (p.admin) {
+      // 닉네임을 비운 관리자 글은 "관리자 [관리자]" 대신 배지만 보여 줍니다.
+      return h('span', { class: 'writer' }, nick === '관리자' ? null : h('span', { class: 'nick' }, nick), h('span', { class: 'badge-admin' }, '관리자'));
+    }
     return h('span', { class: 'writer' },
-      h('span', { class: 'nick' }, p.nick || L.defaultNick),
-      p.admin ? h('span', { class: 'badge-admin' }, '관리자')
-        : p.code ? h('span', { class: 'code', title: '식별코드 (기기마다 다르게 붙습니다)' }, '(' + p.code + ')') : null);
+      h('span', { class: 'nick' }, nick),
+      p.code ? h('span', { class: 'code', title: '식별코드 (기기마다 다르게 붙습니다)' }, '(' + p.code + ')') : null);
   }
 
   function galleryHead(g) {
