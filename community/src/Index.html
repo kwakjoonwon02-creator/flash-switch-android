@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <?!= styles ?>
+  </head>
+  <body>
+    <div id="app" class="app">
+      <div class="boot">불러오는 중…</div>
+    </div>
+    <noscript>이 사이트를 이용하려면 브라우저에서 자바스크립트를 켜 주세요.</noscript>
+    <script>window.__BOOT__ = <?!= boot ?>;</script>
+    <?!= script ?>
+  </body>
+</html>

@@ -1,0 +1,1719 @@
+<script>
+(function () {
+  'use strict';
+
+  /* ───────────────────────── 기본 설정 ───────────────────────── */
+
+  const BOOT = window.__BOOT__ || {};
+  const SITE = BOOT.site || { name: '갤러리', desc: '' };
+  const L = Object.assign({
+    pageSize: 30, defaultNick: 'ㅇㅇ', maxNick: 20, minPassword: 4, maxPassword: 40, maxTitle: 80,
+    maxContent: 20000, maxComment: 500, maxImages: 20, maxImageMB: 5, bestHours: 72, timeZone: 'Asia/Seoul',
+  }, BOOT.limits || {});
+  const MAX_SIDE = 1600; // 올리기 전에 사진의 긴 변을 이 크기로 줄입니다.
+  const TOKEN_RE = /\[사진(\d{1,2})\]/g;
+
+  /* ───────────────────────── 브라우저 저장소 · 기기 식별값 ───────────────────────── */
+
+  const store = (function () {
+    const mem = {};
+    let ls = null;
+    try {
+      ls = window.localStorage;
+      ls.setItem('gal.t', '1');
+      ls.removeItem('gal.t');
+    } catch (e) {
+      ls = null;
+    }
+    return {
+      get(k) {
+        try { if (ls) return ls.getItem('gal.' + k); } catch (e) { /* 메모리 사용 */ }
+        return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null;
+      },
+      set(k, v) {
+        mem[k] = String(v);
+        try { if (ls) ls.setItem('gal.' + k, String(v)); } catch (e) { /* 메모리 사용 */ }
+      },
+      del(k) {
+        delete mem[k];
+        try { if (ls) ls.removeItem('gal.' + k); } catch (e) { /* 무시 */ }
+      },
+    };
+  })();
+
+  function randomHex(bytes) {
+    const a = new Uint8Array(bytes);
+    if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(a);
+    else for (let i = 0; i < bytes; i++) a[i] = Math.floor(Math.random() * 256);
+    let s = '';
+    for (let i = 0; i < a.length; i++) s += (a[i] < 16 ? '0' : '') + a[i].toString(16);
+    return s;
+  }
+
+  let DEVICE = store.get('device');
+  if (!/^[0-9a-f]{32}$/.test(DEVICE || '')) {
+    DEVICE = randomHex(16);
+    store.set('device', DEVICE);
+  }
+
+  const state = {
+    owner: !!BOOT.owner,
+    token: store.get('adminToken') || '',
+    admin: false,
+    code: '',
+    galleries: BOOT.galleries || [],
+    route: null,
+    leaveGuard: null,
+    edit: null, // 비밀번호 확인을 마친 수정용 데이터
+  };
+  state.admin = state.owner || !!state.token;
+
+  /* ───────────────────────── DOM 도우미 ───────────────────────── */
+
+  const $ = (sel, root) => (root || document).querySelector(sel);
+
+  /** h('a', { href, class, onclick }, 자식...) — 사용자 글은 항상 텍스트 노드로 넣어서 XSS를 막습니다. */
+  function h(tag, attrs) {
+    const el = document.createElement(tag);
+    if (attrs) {
+      Object.keys(attrs).forEach((k) => {
+        const v = attrs[k];
+        if (v === null || v === undefined || v === false) return;
+        if (k === 'class') el.className = v;
+        else if (k === 'value') el.value = v;
+        else if (k === 'checked' || k === 'disabled' || k === 'multiple') el[k] = !!v;
+        else if (k.slice(0, 2) === 'on' && typeof v === 'function') el.addEventListener(k.slice(2), v);
+        else el.setAttribute(k, v === true ? '' : String(v));
+      });
+    }
+    for (let i = 2; i < arguments.length; i++) add(el, arguments[i]);
+    return el;
+  }
+
+  function add(el, kid) {
+    if (kid === null || kid === undefined || kid === false) return el;
+    if (Array.isArray(kid)) {
+      kid.forEach((k) => add(el, k));
+      return el;
+    }
+    el.appendChild(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    return el;
+  }
+
+  function setKids(el) {
+    el.textContent = '';
+    for (let i = 1; i < arguments.length; i++) add(el, arguments[i]);
+    return el;
+  }
+
+  const sep = () => h('span', { class: 'sep' });
+
+  const ICONS = {
+    text: '<svg viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 7.5h5M5.5 10h5M5.5 12.5h3" stroke="currentColor" stroke-width="1.2"/></svg>',
+    image: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="5.5" cy="6.2" r="1.3" fill="currentColor"/><path d="M2.5 12.5l3.5-4 2.5 2.5 2-2 3 3.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
+    concept: '<svg viewBox="0 0 16 16"><path d="M8 1.3l2 4.3 4.6.5-3.4 3.1.9 4.6L8 11.5l-4.1 2.3.9-4.6L1.4 6.1 6 5.6z" fill="currentColor"/></svg>',
+    notice: '<svg viewBox="0 0 16 16"><path d="M2 6v4h2.5L9 13V3L4.5 6z" fill="currentColor"/><path d="M11 5.5a3.5 3.5 0 010 5M12.6 3.5a6 6 0 010 9" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+    pen: '<svg viewBox="0 0 16 16"><path d="M11.5 1.8l2.7 2.7-8.6 8.6-3.4.7.7-3.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+    camera: '<svg viewBox="0 0 16 16"><path d="M2 4.5h3l1.2-1.8h3.6L11 4.5h3v8.5H2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="8" cy="8.6" r="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+  };
+
+  function icon(name) {
+    const s = document.createElement('span');
+    s.className = 'ico ico-' + name;
+    s.setAttribute('aria-hidden', 'true');
+    s.innerHTML = ICONS[name] || ''; // 고정된 SVG 문자열만 넣습니다.
+    return s;
+  }
+
+  /* ───────────────────────── 날짜 표시 (한국 시간) ───────────────────────── */
+
+  const pad = (n) => (n < 10 ? '0' : '') + n;
+  const dateFmt = (function () {
+    try {
+      return new Intl.DateTimeFormat('en-US', {
+        timeZone: L.timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+      });
+    } catch (e) {
+      return null;
+    }
+  })();
+
+  function parts(ms) {
+    const d = new Date(ms);
+    if (!dateFmt) {
+      return { y: String(d.getFullYear()), M: pad(d.getMonth() + 1), d: pad(d.getDate()), H: pad(d.getHours()), m: pad(d.getMinutes()), s: pad(d.getSeconds()) };
+    }
+    const o = {};
+    dateFmt.formatToParts(d).forEach((p) => { o[p.type] = p.value; });
+    return { y: o.year, M: o.month, d: o.day, H: o.hour === '24' ? '00' : o.hour, m: o.minute, s: o.second };
+  }
+
+  function fmtFull(ms) {
+    const p = parts(ms);
+    return p.y + '.' + p.M + '.' + p.d + ' ' + p.H + ':' + p.m + ':' + p.s;
+  }
+
+  /** 목록용: 오늘은 시:분, 올해는 월.일, 그 전은 년.월.일 */
+  function fmtShort(ms) {
+    const p = parts(ms);
+    const n = parts(Date.now());
+    if (p.y === n.y && p.M === n.M && p.d === n.d) return p.H + ':' + p.m;
+    if (p.y === n.y) return p.M + '.' + p.d;
+    return p.y.slice(2) + '.' + p.M + '.' + p.d;
+  }
+
+  function fmtComment(ms) {
+    const p = parts(ms);
+    return p.M + '.' + p.d + ' ' + p.H + ':' + p.m + ':' + p.s;
+  }
+
+  /* ───────────────────────── 서버 호출 ───────────────────────── */
+
+  let busyCount = 0;
+  function busy(delta) {
+    busyCount = Math.max(0, busyCount + delta);
+    const b = $('#busy');
+    if (b) b.classList.toggle('on', busyCount > 0);
+  }
+
+  function errorText(err) {
+    let m = String((err && (err.message || err)) || '');
+    m = m.replace(/^(?:[A-Za-z]*(?:Error|Exception))\s*:\s*/, '').trim();
+    if (!m) return '알 수 없는 오류가 발생했습니다.';
+    if (/NetworkError|Failed to fetch|HTTP 0/i.test(m)) return '네트워크 오류입니다. 연결을 확인하고 다시 시도해 주세요.';
+    return m;
+  }
+
+  /** google.script.run 을 Promise로 감싸고, 기기 식별값과 관리자 토큰을 붙입니다. */
+  function call(fn, req, opts) {
+    const quiet = opts && opts.quiet;
+    const payload = Object.assign({}, req || {}, { device: DEVICE });
+    if (state.token) payload.admin = state.token;
+    return new Promise((resolve, reject) => {
+      if (!(window.google && google.script && google.script.run)) {
+        reject(new Error('Apps Script 웹 앱 주소로 접속해 주세요.'));
+        return;
+      }
+      if (!quiet) busy(1);
+      google.script.run
+        .withSuccessHandler((res) => {
+          if (!quiet) busy(-1);
+          resolve(res);
+        })
+        .withFailureHandler((err) => {
+          if (!quiet) busy(-1);
+          const msg = errorText(err);
+          if (state.token && /관리자 권한이 필요/.test(msg)) dropAdmin();
+          reject(new Error(msg));
+        })[fn](payload);
+    });
+  }
+
+  /* ───────────────────────── 알림 · 대화상자 · 사진 크게 보기 ───────────────────────── */
+
+  let toastTimer = 0;
+  function toast(msg, type) {
+    const el = $('#toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'toast show' + (type === 'error' ? ' error' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.className = 'toast'; }, type === 'error' ? 4200 : 2400);
+  }
+
+  /** dialog({ title, message, fields: [{ name, label, type, options, value }], ok, danger }) → 값 객체 또는 null */
+  function dialog(opts) {
+    return new Promise((resolve) => {
+      const inputs = {};
+      const fields = (opts.fields || []).map((f) => {
+        let el;
+        if (f.type === 'select') {
+          el = h('select', { class: 'sel' }, f.options.map((o) => h('option', { value: o[0] }, o[1])));
+          if (f.value !== undefined) el.value = f.value;
+        } else {
+          el = h('input', {
+            class: 'inp', type: f.type || 'text', placeholder: f.placeholder || '', maxlength: f.maxlength,
+            autocomplete: f.type === 'password' ? 'current-password' : 'off', value: f.value || '',
+          });
+        }
+        inputs[f.name] = el;
+        return h('label', { class: 'dlg-field' }, h('span', null, f.label), el);
+      });
+      const onKey = (e) => { if (e.key === 'Escape') done(null); };
+      const done = (v) => {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+        resolve(v);
+      };
+      const form = h('form', {
+        class: 'dlg', role: 'dialog', 'aria-modal': 'true',
+        onsubmit: (e) => {
+          e.preventDefault();
+          const out = {};
+          Object.keys(inputs).forEach((k) => { out[k] = inputs[k].value; });
+          done(out);
+        },
+      },
+        h('h4', null, opts.title || '확인'),
+        opts.message ? h('p', { class: 'dlg-msg' }, opts.message) : null,
+        fields,
+        h('div', { class: 'dlg-btns' },
+          h('button', { class: 'btn', type: 'button', onclick: () => done(null) }, opts.cancel || '취소'),
+          h('button', { class: 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary'), type: 'submit' }, opts.ok || '확인')));
+      const overlay = h('div', { class: 'dlg-overlay', onclick: (e) => { if (e.target === overlay) done(null); } }, form);
+      document.body.appendChild(overlay);
+      document.addEventListener('keydown', onKey);
+      setTimeout(() => {
+        const first = form.querySelector('input, select') || form.querySelector('button[type=submit]');
+        if (first) first.focus();
+      }, 0);
+    });
+  }
+
+  function openLightbox(src, img) {
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const close = () => {
+      box.remove();
+      document.removeEventListener('keydown', onKey);
+    };
+    const box = h('div', { class: 'lightbox', onclick: (e) => { if (e.target === box) close(); } },
+      h('img', { src: src, alt: '첨부 사진' }),
+      h('div', { class: 'lb-bar' },
+        img && img.pub ? h('a', { href: 'https://drive.google.com/file/d/' + encodeURIComponent(img.id) + '/view', target: '_blank', rel: 'noopener noreferrer' }, '원본 보기') : null,
+        h('button', { type: 'button', onclick: close }, '닫기 ✕')));
+    document.body.appendChild(box);
+    document.addEventListener('keydown', onKey);
+  }
+
+  function copyText(text) {
+    const legacy = () => {
+      const ta = h('textarea', { style: 'position:fixed;left:-9999px;top:0', readonly: true });
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      ta.remove();
+      if (!ok) throw new Error('복사하지 못했습니다.');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text).catch(legacy);
+    return new Promise((resolve) => resolve(legacy()));
+  }
+
+  /* ───────────────────────── 주소(라우팅) ───────────────────────── */
+
+  const toInt = (v) => {
+    const n = parseInt(v, 10);
+    return isFinite(n) && n > 0 ? n : 0;
+  };
+
+  function routeFromParams(p) {
+    p = p || {};
+    if (p.admin) return { page: 'admin' };
+    const listPart = { p: toInt(p.p) || 1, mode: p.mode || 'all', head: p.head || '', st: p.st || 'all', q: p.q || '' };
+    if (p.g && toInt(p.id)) return Object.assign({ page: 'view', g: p.g, id: toInt(p.id) }, listPart);
+    if (p.g && p.write) return { page: 'write', g: p.g };
+    if (p.g) return Object.assign({ page: 'list', g: p.g }, listPart);
+    return { page: 'home' };
+  }
+
+  function paramsFromRoute(r) {
+    const o = {};
+    if (r.page === 'admin') return { admin: '1' };
+    if (r.g) o.g = r.g;
+    if (r.page === 'view' || r.page === 'edit') o.id = String(r.id);
+    if (r.page === 'write') o.write = '1';
+    if (r.page === 'list' || r.page === 'view') {
+      if (r.p > 1) o.p = String(r.p);
+      if (r.mode && r.mode !== 'all') o.mode = r.mode;
+      if (r.head) o.head = r.head;
+      if (r.q) {
+        o.q = r.q;
+        if (r.st && r.st !== 'all') o.st = r.st;
+      }
+    }
+    return o;
+  }
+
+  function hrefOf(r) {
+    const qs = new URLSearchParams(paramsFromRoute(r)).toString();
+    return (BOOT.url || '') + (qs ? '?' + qs : '');
+  }
+
+  function go(r, opts) {
+    opts = opts || {};
+    if (!opts.force && state.leaveGuard && state.leaveGuard()) {
+      dialog({ title: '페이지 이동', message: '작성 중인 내용이 사라집니다. 이동할까요?', ok: '이동', danger: true })
+        .then((ok) => { if (ok) go(r, Object.assign({}, opts, { force: true })); });
+      return;
+    }
+    state.leaveGuard = null;
+    const hist = window.google && google.script && google.script.history;
+    if (hist) {
+      try {
+        if (opts.replace) hist.replace(r, paramsFromRoute(r));
+        else hist.push(r, paramsFromRoute(r));
+      } catch (e) { /* 주소창 갱신 실패는 무시 */ }
+    }
+    render(r);
+  }
+
+  /** 앱 안에서 이동하는 링크. 새 탭(가운데 클릭, Ctrl+클릭)으로 열면 실제 주소로 열립니다. */
+  function link(r, kids, attrs) {
+    const a = h('a', Object.assign({ href: hrefOf(r) || '#' }, attrs || {}), kids);
+    a.addEventListener('click', (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      go(r);
+    });
+    return a;
+  }
+
+  let renderSeq = 0;
+  const stale = (seq) => seq !== renderSeq;
+
+  async function render(r) {
+    const seq = ++renderSeq;
+    state.route = r;
+    state.leaveGuard = null;
+    renderGnb();
+    const main = $('#main');
+    try { window.scrollTo(0, 0); } catch (e) { /* 무시 */ }
+    try {
+      if (r.page === 'list') await pageList(main, r, seq);
+      else if (r.page === 'view') await pageView(main, r, seq);
+      else if (r.page === 'write') pageWrite(main, r, null);
+      else if (r.page === 'edit') {
+        if (state.edit && state.edit.id === r.id) pageWrite(main, r, state.edit);
+        else go({ page: 'view', g: r.g, id: r.id }, { replace: true, force: true });
+      } else if (r.page === 'admin') await pageAdmin(main, seq);
+      else await pageHome(main, seq);
+    } catch (err) {
+      if (stale(seq)) return;
+      setKids(main, errorBox(err.message, r));
+    }
+  }
+
+  /* ───────────────────────── 화면 틀 ───────────────────────── */
+
+  function shell() {
+    setKids($('#app'),
+      h('header', { class: 'top' },
+        h('div', { class: 'top-inner' },
+          link({ page: 'home' }, [h('span', { class: 'logo-mark' }, (SITE.name || 'G').charAt(0)), h('span', { class: 'logo-text' }, SITE.name)], { class: 'logo' }),
+          h('div', { class: 'top-right', id: 'topRight' }))),
+      h('nav', { class: 'gnb', 'aria-label': '갤러리 메뉴' }, h('div', { class: 'gnb-inner', id: 'gnb' })),
+      h('main', { class: 'main', id: 'main' }),
+      h('footer', { class: 'foot', id: 'foot' }),
+      h('div', { class: 'busy', id: 'busy' }),
+      h('div', { class: 'toast', id: 'toast', role: 'status', 'aria-live': 'polite' }));
+    renderTopRight();
+    renderGnb();
+    renderFoot();
+  }
+
+  function renderTopRight() {
+    const el = $('#topRight');
+    if (!el) return;
+    setKids(el, state.admin ? [
+      h('span', { class: 'admin-badge' }, '관리자 모드'),
+      link({ page: 'admin' }, '관리', { class: 'btn btn-sm' }),
+      state.token ? h('button', { class: 'btn btn-sm', type: 'button', onclick: adminLogout }, '로그아웃') : null,
+    ] : null);
+  }
+
+  function renderGnb() {
+    const el = $('#gnb');
+    if (!el) return;
+    const r = state.route || {};
+    setKids(el,
+      link({ page: 'home' }, '홈', { class: !r.page || r.page === 'home' ? 'on' : '' }),
+      state.galleries.map((g) => link({ page: 'list', g: g.id }, g.name, { class: r.g === g.id ? 'on' : '' })));
+  }
+
+  function renderFoot() {
+    const el = $('#foot');
+    if (!el) return;
+    setKids(el,
+      h('div', null, SITE.name, h('span', { class: 'sep' }, '|'), 'Google Apps Script로 운영됩니다'),
+      h('div', null,
+        state.code ? ['내 식별코드 ', h('b', null, '(' + state.code + ')'), h('span', { class: 'sep' }, '|')] : null,
+        state.admin
+          ? link({ page: 'admin' }, '관리자 페이지')
+          : h('a', { href: '#', onclick: (e) => { e.preventDefault(); adminLogin(); } }, '관리자 로그인')));
+  }
+
+  function loadingBox() {
+    return h('div', { class: 'loading' }, '불러오는 중…');
+  }
+
+  function errorBox(msg, r) {
+    return h('div', { class: 'box error-box' },
+      h('p', null, msg || '오류가 발생했습니다.'),
+      h('button', { class: 'btn', type: 'button', onclick: () => render(r) }, '다시 시도'),
+      ' ',
+      r && r.g && r.page !== 'list' ? link({ page: 'list', g: r.g }, '갤러리 목록', { class: 'btn' }) : null,
+      ' ',
+      link({ page: 'home' }, '홈으로', { class: 'btn btn-primary' }));
+  }
+
+  function findGallery(id) {
+    return state.galleries.filter((g) => g.id === id)[0] || null;
+  }
+
+  function setGalleries(list) {
+    state.galleries = list.map((g) => ({ id: g.id, name: g.name, desc: g.desc, heads: g.heads || [], threshold: g.threshold, hidden: !!g.hidden }));
+    renderGnb();
+  }
+
+  function writer(p) {
+    const nick = p.nick || L.defaultNick;
+    if (p.admin) {
+      // 닉네임을 비운 관리자 글은 "관리자 [관리자]" 대신 배지만 보여 줍니다.
+      return h('span', { class: 'writer' }, nick === '관리자' ? null : h('span', { class: 'nick' }, nick), h('span', { class: 'badge-admin' }, '관리자'));
+    }
+    return h('span', { class: 'writer' },
+      h('span', { class: 'nick' }, nick),
+      p.code ? h('span', { class: 'code', title: '식별코드 (기기마다 다르게 붙습니다)' }, '(' + p.code + ')') : null);
+  }
+
+  function galleryHead(g) {
+    return h('div', { class: 'ghead' },
+      h('h2', null, link({ page: 'list', g: g.id }, g.name + ' 갤러리')),
+      g.desc ? h('p', { class: 'gdesc' }, g.desc) : null);
+  }
+
+  function boxTitle(t, small) {
+    return h('h3', { class: 'box-title' }, t, small ? h('small', null, small) : null);
+  }
+
+  function kindOf(p, g, pinned) {
+    if (pinned || p.notice) return 'notice';
+    if (g && p.up >= g.threshold) return 'concept';
+    return p.img ? 'image' : 'text';
+  }
+
+  /* ───────────────────────── 글 목록 ───────────────────────── */
+
+  function listSection(res, currentId) {
+    const g = res.gallery;
+    const at = (extra) => Object.assign({ page: 'list', g: g.id }, extra);
+    const writeBtn = () => link({ page: 'write', g: g.id }, [icon('pen'), '글쓰기'], { class: 'btn btn-primary' });
+    return h('section', { class: 'list-wrap' },
+      h('div', { class: 'list-top' },
+        h('div', { class: 'tabs' }, [['all', '전체글'], ['concept', '개념글'], ['notice', '공지']].map((t) =>
+          link(at({ mode: t[0] }), t[1], { class: 'tab' + (res.mode === t[0] ? ' on' : '') }))),
+        writeBtn()),
+      g.heads.length ? h('div', { class: 'heads' },
+        link(at({ mode: res.mode }), '전체', { class: 'head-tab' + (!res.head ? ' on' : '') }),
+        g.heads.map((x) => link(at({ mode: res.mode, head: x }), x, { class: 'head-tab' + (res.head === x ? ' on' : '') }))) : null,
+      res.q ? h('p', { class: 'search-info' }, '"' + res.q + '" 검색 결과 ' + res.total + '개',
+        link(at({ mode: res.mode, head: res.head }), '검색 취소')) : null,
+      postTable(res, currentId),
+      h('div', { class: 'list-bottom' },
+        pagination(res, (p) => at({ mode: res.mode, head: res.head, st: res.st, q: res.q, p: p })),
+        h('div', { class: 'list-bottom-row' }, searchForm(res), writeBtn())));
+  }
+
+  function postTable(res, currentId) {
+    const g = res.gallery;
+    const ctx = { p: res.page, mode: res.mode, head: res.head, st: res.st, q: res.q };
+    const hasHeads = g.heads.length > 0;
+    const rows = [];
+    res.notices.forEach((p) => rows.push(postRow(p, g, ctx, currentId, true, hasHeads)));
+    res.posts.forEach((p) => rows.push(postRow(p, g, ctx, currentId, false, hasHeads)));
+    if (!rows.length) {
+      const empty = res.q ? '검색 결과가 없습니다.'
+        : res.mode === 'concept' ? '아직 개념글이 없습니다. 추천 ' + g.threshold + '개를 받으면 개념글이 됩니다.'
+          : res.mode === 'notice' ? '공지가 없습니다.' : '아직 글이 없습니다. 첫 글을 써 보세요!';
+      rows.push(h('tr', { class: 'empty' }, h('td', { colspan: hasHeads ? 7 : 6 }, empty)));
+    }
+    return h('table', { class: 'plist' },
+      h('thead', null, h('tr', null,
+        h('th', { class: 'c-no' }, '번호'),
+        hasHeads ? h('th', { class: 'c-head' }, '말머리') : null,
+        h('th', { class: 'c-title' }, '제목'),
+        h('th', { class: 'c-nick' }, '글쓴이'),
+        h('th', { class: 'c-date' }, '작성일'),
+        h('th', { class: 'c-num' }, '조회'),
+        h('th', { class: 'c-num' }, '추천'))),
+      h('tbody', null, rows));
+  }
+
+  function postRow(p, g, ctx, currentId, pinned, hasHeads) {
+    const r = Object.assign({ page: 'view', g: g.id, id: p.id }, ctx);
+    const current = p.id === currentId;
+    return h('tr', { class: (pinned ? 'is-notice' : '') + (current ? ' is-current' : '') },
+      h('td', { class: 'c-no' }, pinned ? h('b', null, '공지') : p.no),
+      hasHeads ? h('td', { class: 'c-head' }, p.head) : null,
+      h('td', { class: 'c-title' },
+        h('div', { class: 't-line' },
+          link(r, [icon(kindOf(p, g, pinned)),
+            hasHeads && p.head ? h('span', { class: 'm-head' }, '[' + p.head + ']') : null,
+            h('span', { class: 'tit' }, p.title)], { class: 'ptitle' }),
+          p.cmt ? h('span', { class: 'cmt-num', title: '댓글 ' + p.cmt + '개' }, '[' + p.cmt + ']') : null),
+        h('div', { class: 'm-meta' }, writer(p), sep(), fmtShort(p.at), sep(), '조회 ' + p.views, sep(), '추천 ' + p.up)),
+      h('td', { class: 'c-nick' }, writer(p)),
+      h('td', { class: 'c-date', title: fmtFull(p.at) }, fmtShort(p.at)),
+      h('td', { class: 'c-num' }, p.views),
+      h('td', { class: 'c-num' }, p.up));
+  }
+
+  function pagination(res, routeFor) {
+    const block = 10;
+    const start = Math.floor((res.page - 1) / block) * block + 1;
+    const end = Math.min(res.pages, start + block - 1);
+    const items = [];
+    if (start > 1) {
+      items.push(link(routeFor(1), '처음', { class: 'pg-edge' }));
+      items.push(link(routeFor(start - 1), '이전', { class: 'pg-edge' }));
+    }
+    for (let i = start; i <= end; i++) {
+      items.push(i === res.page ? h('em', { 'aria-current': 'page' }, String(i)) : link(routeFor(i), String(i)));
+    }
+    if (end < res.pages) {
+      items.push(link(routeFor(end + 1), '다음', { class: 'pg-edge' }));
+      items.push(link(routeFor(res.pages), '끝', { class: 'pg-edge' }));
+    }
+    return h('nav', { class: 'pager', 'aria-label': '페이지' }, items);
+  }
+
+  function searchForm(res) {
+    const sel = h('select', { class: 'sel', 'aria-label': '검색 범위' },
+      [['all', '제목+내용'], ['title', '제목'], ['content', '내용'], ['nick', '글쓴이']].map((o) => h('option', { value: o[0] }, o[1])));
+    sel.value = res.st || 'all';
+    const input = h('input', { class: 'inp', type: 'search', placeholder: '검색어', maxlength: 50, value: res.q || '', 'aria-label': '검색어' });
+    return h('form', {
+      class: 'search', role: 'search',
+      onsubmit: (e) => {
+        e.preventDefault();
+        go({ page: 'list', g: res.gallery.id, mode: res.mode, head: res.head, st: sel.value, q: input.value.trim(), p: 1 });
+      },
+    }, sel, input, h('button', { class: 'btn btn-primary', type: 'submit' }, '검색'));
+  }
+
+  /* ───────────────────────── 본문 · 사진 표시 ───────────────────────── */
+
+  const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+/gi;
+
+  /** 텍스트를 넣으면서 http(s) 주소만 링크로 바꿉니다. */
+  function appendText(parent, s) {
+    if (!s) return;
+    let last = 0;
+    let m;
+    URL_RE.lastIndex = 0;
+    while ((m = URL_RE.exec(s))) {
+      let url = m[0];
+      const trail = url.match(/[)\].,!?;:]+$/);
+      if (trail) url = url.slice(0, url.length - trail[0].length);
+      if (m.index > last) parent.appendChild(document.createTextNode(s.slice(last, m.index)));
+      parent.appendChild(h('a', { href: url, target: '_blank', rel: 'noopener noreferrer nofollow ugc', class: 'ext' }, url));
+      last = m.index + url.length;
+      URL_RE.lastIndex = last;
+    }
+    if (last < s.length) parent.appendChild(document.createTextNode(s.slice(last)));
+  }
+
+  function linkified(text) {
+    const f = document.createDocumentFragment();
+    appendText(f, text);
+    return f;
+  }
+
+  /** 본문의 [사진N] 자리에 N번째 사진을 넣고, 본문에 안 쓴 사진은 맨 아래에 붙입니다. */
+  function renderContent(text, images) {
+    const frag = document.createDocumentFragment();
+    const used = {};
+    let last = 0;
+    let m;
+    TOKEN_RE.lastIndex = 0;
+    while ((m = TOKEN_RE.exec(text))) {
+      const idx = Number(m[1]) - 1;
+      if (!images[idx]) continue;
+      let chunk = text.slice(last, m.index);
+      if (chunk.slice(-1) === '\n') chunk = chunk.slice(0, -1);
+      appendText(frag, chunk);
+      frag.appendChild(figure(images[idx]));
+      used[idx] = true;
+      last = TOKEN_RE.lastIndex;
+      if (text.charAt(last) === '\n') last++;
+    }
+    appendText(frag, text.slice(last));
+    images.forEach((img, i) => { if (!used[i]) frag.appendChild(figure(img)); });
+    return frag;
+  }
+
+  /**
+   * 본문 사진. GIF는 먼저 정지 화면(드라이브 썸네일)을 보여 주고, 누르면 움직이는 원본을 서버에서 받아 옵니다.
+   * (방문자 모두가 주인 계정의 실행 한도를 나눠 쓰므로 움짤을 자동으로 전부 받아 오지 않습니다)
+   */
+  function figure(img) {
+    const gif = img.mime === 'image/gif';
+    // 이모티콘처럼 작은 GIF는 재생 버튼보다 작으니 바로 움직이게 합니다.
+    const tiny = img.w > 0 && img.h > 0 && (img.w < 160 || img.h < 100);
+    const el = imageEl(img, 1600, gif && tiny);
+    const wrap = h('div', { class: 'vimg' }, el);
+    let play = null;
+    if (gif && img.pub && !tiny) {
+      play = h('button', { class: 'gif-play', type: 'button', 'aria-label': '움짤 재생' }, 'GIF ▶');
+      wrap.classList.add('is-gif');
+      wrap.appendChild(play);
+      play.addEventListener('click', (e) => {
+        e.stopPropagation();
+        play.disabled = true;
+        play.textContent = '불러오는 중…';
+        viaScript(img.id).then((src) => {
+          el.dataset.animated = '1';
+          el.src = src;
+          play.remove();
+        }, () => {
+          play.disabled = false;
+          play.textContent = '다시 시도 ▶';
+        });
+      });
+      // 정지 화면을 못 불러와 이미 원본을 받았으면 재생 버튼이 필요 없음
+      el.addEventListener('load', () => { if (el.dataset.animated === '1' && play.parentNode) play.remove(); });
+    }
+    el.addEventListener('click', () => {
+      if (!el.classList.contains('loaded')) return;
+      if (play && play.parentNode && !play.disabled) play.click();
+      else openLightbox(el.currentSrc || el.src, img);
+    });
+    return wrap;
+  }
+
+  const dataUrls = new Map();
+  const scriptQueue = [];
+  let scriptBusy = 0;
+  /** 서버에서 사진 원본을 받아 옵니다. 모든 방문자가 주인 계정의 동시 실행 한도(30개)를 나눠 쓰므로 한 번에 2장까지만. */
+  function viaScript(id) {
+    if (!dataUrls.has(id)) {
+      const p = new Promise((resolve, reject) => {
+        scriptQueue.push({ id: id, resolve: resolve, reject: reject });
+        pumpScript();
+      });
+      p.catch(() => dataUrls.delete(id));
+      dataUrls.set(id, p);
+    }
+    return dataUrls.get(id);
+  }
+
+  function pumpScript() {
+    while (scriptBusy < 2 && scriptQueue.length) {
+      const job = scriptQueue.shift();
+      scriptBusy++;
+      call('apiImage', { id: job.id }, { quiet: true })
+        .then((res) => job.resolve('data:' + res.mime + ';base64,' + res.data), job.reject)
+        .then(() => {
+          scriptBusy--;
+          pumpScript();
+        });
+    }
+  }
+
+  /** 공개 사진은 구글 드라이브 썸네일 주소로 보여 주고(GIF는 정지 화면), 안 되면 서버에서 받아 옵니다. */
+  function driveUrls(img, size) {
+    if (!img.pub) return [];
+    const id = encodeURIComponent(img.id);
+    return [
+      'https://drive.google.com/thumbnail?id=' + id + '&sz=w' + size,
+      'https://lh3.googleusercontent.com/d/' + id + '=w' + size,
+    ];
+  }
+
+  let observer = null;
+  function whenVisible(el, fn) {
+    if (!('IntersectionObserver' in window)) {
+      fn();
+      return;
+    }
+    if (!observer) {
+      observer = new IntersectionObserver((entries) => {
+        entries.forEach((e) => {
+          if (!e.isIntersecting) return;
+          observer.unobserve(e.target);
+          const start = e.target.__start;
+          e.target.__start = null;
+          if (start) start();
+        });
+      }, { rootMargin: '800px 0px' });
+    }
+    el.__start = fn;
+    observer.observe(el);
+  }
+
+  function imageEl(img, size, original) {
+    const el = h('img', { alt: '첨부 사진', decoding: 'async', referrerpolicy: 'no-referrer' });
+    if (img.w > 0 && img.h > 0) {
+      el.width = img.w;
+      el.height = img.h;
+    }
+    const urls = original ? [] : driveUrls(img, size);
+    let i = 0;
+    let scripted = false;
+    const broken = () => {
+      el.classList.add('broken');
+      el.alt = '사진을 불러오지 못했습니다';
+    };
+    const next = () => {
+      if (i < urls.length) {
+        el.src = urls[i++];
+        return;
+      }
+      if (scripted) {
+        broken();
+        return;
+      }
+      scripted = true;
+      viaScript(img.id).then((src) => {
+        el.dataset.animated = '1';
+        el.src = src;
+      }, broken);
+    };
+    el.addEventListener('error', next);
+    el.addEventListener('load', () => el.classList.add('loaded'));
+    whenVisible(el, next);
+    return el;
+  }
+
+  function thumbImg(id) {
+    const img = h('img', {
+      class: 'thumb', alt: '', loading: 'lazy', referrerpolicy: 'no-referrer',
+      src: 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(id) + '&sz=w200',
+    });
+    img.addEventListener('error', () => { img.style.visibility = 'hidden'; });
+    return img;
+  }
+
+  /* ───────────────────────── 첫 화면 ───────────────────────── */
+
+  function simpleList(posts, opts) {
+    opts = opts || {};
+    if (!posts.length) return h('ul', { class: 'slist' }, h('li', { class: 'empty' }, opts.empty || '아직 글이 없습니다.'));
+    return h('ul', { class: 'slist' }, posts.map((p, i) => {
+      const g = findGallery(p.g);
+      return h('li', null, link({ page: 'view', g: p.g, id: p.id }, [
+        opts.rank ? h('span', { class: 'rank' + (i < 3 ? ' hot' : '') }, String(i + 1)) : null,
+        opts.thumbs && p.thumb ? thumbImg(p.thumb) : null,
+        h('span', { class: 's-main' },
+          h('span', { class: 's-title' }, icon(kindOf(p, g, false)), h('span', { class: 'tit' }, p.title),
+            p.cmt ? h('span', { class: 'cmt-num' }, '[' + p.cmt + ']') : null),
+          h('span', { class: 's-sub' }, h('span', { class: 's-gall' }, g ? g.name : p.g), ' · ', p.nick, ' · ', fmtShort(p.at), ' · 조회 ' + p.views)),
+        opts.rank ? h('span', { class: 's-up' }, '추천 ' + p.up) : null,
+      ]));
+    }));
+  }
+
+  async function pageHome(main, seq) {
+    setKids(main, loadingBox());
+    const res = await call('apiHome', {});
+    if (stale(seq)) return;
+    setGalleries(res.galleries);
+    setKids(main,
+      h('section', { class: 'hero' },
+        h('h1', null, SITE.name),
+        SITE.desc ? h('p', null, SITE.desc) : null,
+        h('div', { class: 'hero-stats' }, '갤러리 ' + res.galleries.length + '개 · 전체 글 ' + res.total + '개')),
+      h('div', { class: 'home-grid' },
+        h('section', { class: 'box box-full' }, boxTitle('갤러리'),
+          h('ul', { class: 'gall-list' }, res.galleries.map((g) => h('li', null, link({ page: 'list', g: g.id }, [
+            h('strong', null, g.name + ' 갤러리', g.hidden ? h('span', { class: 'badge-admin' }, '숨김') : null),
+            h('span', { class: 'gall-desc' }, g.desc || '\u00A0'),
+            h('span', { class: 'gall-count' }, '글 ' + g.total, g.today ? h('em', null, ' · 오늘 +' + g.today) : null),
+          ]))))),
+        h('section', { class: 'box' }, boxTitle('실시간 베스트', '최근 ' + L.bestHours + '시간 추천순'),
+          simpleList(res.best, { rank: true, thumbs: true, empty: '아직 추천받은 글이 없습니다.' })),
+        h('section', { class: 'box' }, boxTitle('최신 글'), simpleList(res.recent)),
+        h('section', { class: 'box box-full' }, boxTitle('개념글', '추천을 많이 받은 글'),
+          simpleList(res.concept, { empty: '아직 개념글이 없습니다.' }))));
+  }
+
+  /* ───────────────────────── 목록 · 글 보기 페이지 ───────────────────────── */
+
+  async function pageList(main, r, seq) {
+    const known = findGallery(r.g);
+    setKids(main, known ? galleryHead(known) : null, loadingBox());
+    const res = await call('apiList', { g: r.g, p: r.p, mode: r.mode, head: r.head, st: r.st, q: r.q });
+    if (stale(seq)) return;
+    setKids(main, galleryHead(res.gallery), listSection(res, 0));
+  }
+
+  async function pageView(main, r, seq) {
+    const known = findGallery(r.g);
+    setKids(main, known ? galleryHead(known) : null, loadingBox());
+    const res = await call('apiView', { id: r.id, seen: seenRecently(r.id), list: { p: r.p, mode: r.mode, head: r.head, st: r.st, q: r.q } });
+    if (stale(seq)) return;
+    if (res.gallery.id !== r.g) {
+      r.g = res.gallery.id;
+      renderGnb();
+    }
+    setKids(main, galleryHead(res.gallery), viewSection(res, r), res.list ? listSection(res.list, res.post.id) : null);
+  }
+
+  const VIEW_MEMORY_MS = 6 * 3600 * 1000;
+  /** 이 브라우저가 6시간 안에 본 글인지. 서버 캐시 대신 브라우저에 기억해서 조회수 중복을 막습니다. */
+  function seenRecently(id) {
+    let map = {};
+    try { map = JSON.parse(store.get('views') || '{}') || {}; } catch (e) { map = {}; }
+    const now = Date.now();
+    const seen = typeof map[id] === 'number' && now - map[id] < VIEW_MEMORY_MS;
+    const next = {};
+    Object.keys(map)
+      .filter((k) => typeof map[k] === 'number' && now - map[k] < VIEW_MEMORY_MS)
+      .sort((a, b) => map[b] - map[a])
+      .slice(0, 300)
+      .forEach((k) => { next[k] = map[k]; });
+    if (!seen) next[id] = now;
+    store.set('views', JSON.stringify(next));
+    return seen;
+  }
+
+  function viewSection(res, r) {
+    const post = res.post;
+    const g = res.gallery;
+    const live = { up: h('b', null, String(post.up)), cmt: h('b', null, String(post.cmt)) };
+    const edited = post.updatedAt && post.updatedAt - post.at > 60 * 1000;
+    return h('article', { class: 'view' },
+      h('header', { class: 'vhead' },
+        h('h3', { class: 'vtitle' }, post.head ? h('span', { class: 'vhead-tag' }, '[' + post.head + ']') : null, post.title),
+        h('div', { class: 'vmeta' },
+          h('div', { class: 'vmeta-l' }, writer(post), sep(), h('span', null, fmtFull(post.at)),
+            edited ? h('span', { class: 'edited', title: '수정 ' + fmtFull(post.updatedAt) }, '(수정됨)') : null),
+          h('div', { class: 'vmeta-r' }, '조회', h('b', null, String(post.views)), sep(), '추천', live.up, sep(), '댓글', live.cmt))),
+      h('div', { class: 'vbody' }, renderContent(post.content, post.images)),
+      voteBox(post, g, live),
+      viewActions(post, g, r),
+      commentSection(post, res.comments, live));
+  }
+
+  function voteBox(post, g, live) {
+    const upN = h('strong', null, String(post.up));
+    const downN = h('strong', null, String(post.down));
+    const send = async (type, btn) => {
+      btn.disabled = true;
+      try {
+        const wasConcept = post.up >= g.threshold;
+        const res = await call('apiVote', { id: post.id, type: type });
+        post.up = res.up;
+        post.down = res.down;
+        upN.textContent = res.up;
+        downN.textContent = res.down;
+        live.up.textContent = res.up;
+        if (!wasConcept && res.up >= g.threshold) toast('추천 ' + g.threshold + '개! 개념글이 되었습니다.');
+        else toast(type === 'up' ? '추천했습니다.' : '비추천했습니다.');
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    const upBtn = h('button', { class: 'vote-btn up', type: 'button', onclick: () => send('up', upBtn), 'aria-label': '추천' }, upN, h('span', null, '추천'));
+    const downBtn = h('button', { class: 'vote-btn down', type: 'button', onclick: () => send('down', downBtn), 'aria-label': '비추천' }, downN, h('span', null, '비추'));
+    const shareUrl = BOOT.url ? hrefOf({ page: 'view', g: post.g, id: post.id }) : '';
+    return h('div', { class: 'vote' },
+      h('div', { class: 'vote-inner' }, upBtn, downBtn),
+      h('p', { class: 'vote-hint' }, '추천 ' + g.threshold + '개를 받으면 개념글이 됩니다.'),
+      shareUrl ? h('div', { class: 'vote-tools' }, h('button', {
+        class: 'btn btn-sm', type: 'button',
+        onclick: () => copyText(shareUrl).then(() => toast('글 주소를 복사했습니다.'), () => toast('복사하지 못했습니다: ' + shareUrl, 'error')),
+      }, '주소 복사')) : null);
+  }
+
+  function viewActions(post, g, r) {
+    const listRoute = { page: 'list', g: g.id, p: r.p || 1, mode: r.mode || 'all', head: r.head || '', st: r.st || 'all', q: r.q || '' };
+    return h('div', { class: 'vactions' },
+      h('div', { class: 'vactions-l' },
+        link(listRoute, '목록', { class: 'btn' }),
+        h('button', { class: 'btn', type: 'button', onclick: () => startEdit(post, g) }, '수정'),
+        h('button', { class: 'btn', type: 'button', onclick: () => removePost(post, listRoute) }, '삭제')),
+      link({ page: 'write', g: g.id }, [icon('pen'), '글쓰기'], { class: 'btn btn-primary' }),
+      state.admin ? h('div', { class: 'admin-tools' },
+        h('span', { class: 'label' }, '관리'),
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => toggleNotice(post) }, post.notice ? '공지 내리기' : '공지로 올리기'),
+        post.admin ? null : h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: () => banUser('post', post.id, post.code) }, '작성자 차단')) : null);
+  }
+
+  async function startEdit(post, g) {
+    let pw = '';
+    if (post.admin) {
+      if (!state.admin) {
+        toast('관리자 글은 관리자만 수정할 수 있습니다.', 'error');
+        return;
+      }
+    } else {
+      const v = await dialog({ title: '글 수정', message: '글을 쓸 때 정한 비밀번호를 입력하세요.', fields: [{ name: 'pw', label: '비밀번호', type: 'password' }], ok: '확인' });
+      if (!v) return;
+      pw = v.pw;
+    }
+    try {
+      const data = await call('apiPostForEdit', { id: post.id, pw: pw });
+      state.edit = { id: post.id, pw: pw, data: data };
+      go({ page: 'edit', g: g.id, id: post.id });
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function removePost(post, listRoute) {
+    let pw = '';
+    if (state.admin) {
+      if (!(await dialog({ title: '글 삭제', message: '이 글을 삭제할까요? (관리자 권한)', ok: '삭제', danger: true }))) return;
+    } else {
+      if (post.admin) {
+        toast('관리자 글은 삭제할 수 없습니다.', 'error');
+        return;
+      }
+      const v = await dialog({ title: '글 삭제', message: '글을 쓸 때 정한 비밀번호를 입력하세요.', fields: [{ name: 'pw', label: '비밀번호', type: 'password' }], ok: '삭제', danger: true });
+      if (!v) return;
+      pw = v.pw;
+    }
+    try {
+      await call('apiDeletePost', { id: post.id, pw: pw });
+      toast('글을 삭제했습니다.');
+      go(listRoute, { replace: true, force: true });
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function toggleNotice(post) {
+    try {
+      const res = await call('apiAdminNotice', { id: post.id, on: !post.notice });
+      toast(res.notice ? '공지로 올렸습니다.' : '공지를 내렸습니다.');
+      render(state.route);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function banUser(kind, id, code) {
+    const v = await dialog({
+      title: '작성자 차단',
+      message: '식별코드 (' + code + ') 기기의 글쓰기·댓글·추천·사진 올리기를 막습니다.',
+      fields: [
+        { name: 'days', label: '기간', type: 'select', value: '7', options: [['1', '1일'], ['7', '7일'], ['30', '30일'], ['0', '영구']] },
+        { name: 'reason', label: '사유 (선택)', placeholder: '예: 도배, 욕설', maxlength: 100 },
+      ],
+      ok: '차단', danger: true,
+    });
+    if (!v) return;
+    try {
+      const res = await call('apiAdminBan', { kind: kind, id: id, days: Number(v.days), reason: v.reason });
+      toast('(' + res.code + ') 을(를) 차단했습니다.');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  /* ───────────────────────── 댓글 ───────────────────────── */
+
+  function countComments(list) {
+    return list.filter((c) => !c.deleted).length;
+  }
+
+  function commentSection(post, comments, live) {
+    const total = h('b', null, String(countComments(comments)));
+    const list = h('ul', { class: 'cmt-list' });
+    const update = (res) => {
+      comments = res.comments;
+      total.textContent = res.count;
+      live.cmt.textContent = res.count;
+      post.cmt = res.count;
+      draw();
+    };
+    const item = (c) => {
+      const cls = 'cmt' + (c.parent ? ' reply' : '');
+      if (c.deleted) return h('li', { class: cls }, h('p', { class: 'cmt-del' }, '삭제된 댓글입니다.'));
+      const li = h('li', { class: cls });
+      let box = null;
+      const toggleReply = () => {
+        if (box) {
+          box.remove();
+          box = null;
+          return;
+        }
+        box = h('div', { class: 'reply-box' }, commentForm(post.id, c.id, update, true));
+        li.appendChild(box);
+        const ta = box.querySelector('textarea');
+        if (ta) ta.focus();
+      };
+      return add(li, [
+        h('div', { class: 'cmt-meta' }, writer(c), sep(), h('span', null, fmtComment(c.at)),
+          h('span', { class: 'cmt-tools' },
+            h('button', { class: 'btn btn-text', type: 'button', onclick: toggleReply }, '답글'),
+            h('button', { class: 'btn btn-text', type: 'button', onclick: () => removeComment(c, update) }, '삭제'),
+            state.admin && !c.admin ? h('button', { class: 'btn btn-text', type: 'button', onclick: () => banUser('comment', c.id, c.code) }, '차단') : null)),
+        h('div', { class: 'cmt-body' }, linkified(c.content)),
+      ]);
+    };
+    const draw = () => setKids(list, comments.length ? comments.map(item) : h('li', { class: 'cmt-empty' }, '첫 댓글을 남겨 보세요.'));
+    draw();
+    return h('section', { class: 'cmts', 'aria-label': '댓글' },
+      h('div', { class: 'cmts-head' }, '전체 댓글 ', total, '개'),
+      list,
+      commentForm(post.id, 0, update, false));
+  }
+
+  async function removeComment(c, update) {
+    let pw = '';
+    if (state.admin) {
+      if (!(await dialog({ title: '댓글 삭제', message: '이 댓글을 삭제할까요? (관리자 권한)', ok: '삭제', danger: true }))) return;
+    } else {
+      if (c.admin) {
+        toast('관리자 댓글은 삭제할 수 없습니다.', 'error');
+        return;
+      }
+      const v = await dialog({ title: '댓글 삭제', message: '댓글을 쓸 때 정한 비밀번호를 입력하세요.', fields: [{ name: 'pw', label: '비밀번호', type: 'password' }], ok: '삭제', danger: true });
+      if (!v) return;
+      pw = v.pw;
+    }
+    try {
+      update(await call('apiDeleteComment', { id: c.id, pw: pw }));
+      toast('댓글을 삭제했습니다.');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function commentForm(postId, parentId, onDone, isReply) {
+    const nick = h('input', { class: 'inp', placeholder: '닉네임', maxlength: L.maxNick, value: store.get('nick') || '', 'aria-label': '닉네임' });
+    const pw = h('input', {
+      class: 'inp', type: 'password', placeholder: state.admin ? '비밀번호 (선택)' : '비밀번호',
+      maxlength: L.maxPassword, autocomplete: 'new-password', 'aria-label': '비밀번호',
+    });
+    const ta = h('textarea', {
+      class: 'inp', rows: 3, maxlength: L.maxComment, 'aria-label': '댓글 내용',
+      placeholder: isReply ? '답글을 입력하세요.' : '댓글을 입력하세요. 욕설·비방·도배는 삭제될 수 있습니다. (Ctrl+Enter 등록)',
+    });
+    const hp = h('input', { class: 'hp', name: 'website', tabindex: '-1', autocomplete: 'off', 'aria-hidden': 'true' });
+    const counter = h('span', { class: 'counter' }, '0/' + L.maxComment);
+    const btn = h('button', { class: 'btn btn-primary', type: 'submit' }, '등록');
+    ta.addEventListener('input', () => { counter.textContent = ta.value.length + '/' + L.maxComment; });
+    const form = h('form', {
+      class: 'cmt-form',
+      onsubmit: async (e) => {
+        e.preventDefault();
+        if (!ta.value.trim()) {
+          toast('댓글 내용을 입력해 주세요.', 'error');
+          ta.focus();
+          return;
+        }
+        if (!state.admin && pw.value.length < L.minPassword) {
+          toast('비밀번호를 ' + L.minPassword + '자 이상 입력해 주세요. (댓글 삭제할 때 필요)', 'error');
+          pw.focus();
+          return;
+        }
+        btn.disabled = true;
+        try {
+          store.set('nick', nick.value.trim());
+          const res = await call('apiAddComment', { postId: postId, parentId: parentId, nick: nick.value, pw: pw.value, content: ta.value, hp: hp.value });
+          ta.value = '';
+          counter.textContent = '0/' + L.maxComment;
+          onDone(res);
+          toast(isReply ? '답글을 달았습니다.' : '댓글을 달았습니다.');
+        } catch (err) {
+          toast(err.message, 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      },
+    },
+      h('div', { class: 'ids' }, nick, pw),
+      h('div', { class: 'body' }, ta, h('div', { class: 'foot-row' }, counter, btn)),
+      hp);
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        btn.click();
+      }
+    });
+    return form;
+  }
+
+  /* ───────────────────────── 글쓰기 · 사진 올리기 ───────────────────────── */
+
+  function pageWrite(main, r, edit) {
+    const g = edit ? edit.data.gallery : findGallery(r.g);
+    if (!g) throw new Error('존재하지 않는 갤러리입니다.');
+    const data = edit ? edit.data.post : null;
+    const headSel = g.heads.length ? h('select', { class: 'sel', 'aria-label': '말머리' }, g.heads.map((x) => h('option', { value: x }, x))) : null;
+    if (headSel && data && data.head) headSel.value = data.head;
+    const nick = h('input', {
+      class: 'inp w-nick', maxlength: L.maxNick, 'aria-label': '닉네임', disabled: !!data,
+      placeholder: '닉네임 (비우면 ' + L.defaultNick + ')', value: data ? data.nick : (store.get('nick') || ''),
+    });
+    const pw = data ? null : h('input', {
+      class: 'inp w-pw', type: 'password', maxlength: L.maxPassword, autocomplete: 'new-password', 'aria-label': '비밀번호',
+      placeholder: state.admin ? '비밀번호 (관리자는 선택)' : '비밀번호 (수정·삭제용)',
+    });
+    const title = h('input', { class: 'inp', maxlength: L.maxTitle, placeholder: '제목을 입력해 주세요.', value: data ? data.title : '', 'aria-label': '제목' });
+    const ta = h('textarea', {
+      class: 'inp editor', maxlength: L.maxContent, 'aria-label': '내용',
+      placeholder: '내용을 입력하세요.\n\n사진은 아래 [사진 첨부] 버튼, 드래그 앤 드롭, 붙여넣기(Ctrl+V)로 올릴 수 있고\n본문의 [사진1], [사진2] … 자리에 들어갑니다.',
+    });
+    ta.value = data ? data.content : '';
+    const hp = h('input', { class: 'hp', name: 'website', tabindex: '-1', autocomplete: 'off', 'aria-hidden': 'true' });
+    const up = uploader(ta, data ? data.images : []);
+    const submit = h('button', { class: 'btn btn-primary', type: 'submit' }, data ? '수정 완료' : '등록');
+    let sent = false;
+    const origTitle = data ? data.title : '';
+    const origBody = data ? data.content : '';
+    state.leaveGuard = () => !sent && (title.value.trim() !== origTitle.trim() || ta.value.trim() !== origBody.trim() || up.changed());
+    const cancelRoute = data ? { page: 'view', g: g.id, id: data.id } : { page: 'list', g: g.id };
+    const form = h('form', {
+      class: 'write',
+      onsubmit: async (e) => {
+        e.preventDefault();
+        if (!title.value.trim()) {
+          toast('제목을 입력해 주세요.', 'error');
+          title.focus();
+          return;
+        }
+        if (!ta.value.trim() && !up.count()) {
+          toast('내용을 입력해 주세요.', 'error');
+          ta.focus();
+          return;
+        }
+        if (pw && !state.admin && pw.value.length < L.minPassword) {
+          toast('비밀번호를 ' + L.minPassword + '자 이상 입력해 주세요.', 'error');
+          pw.focus();
+          return;
+        }
+        submit.disabled = true;
+        try {
+          if (up.pending()) {
+            toast('사진을 다 올릴 때까지 잠시만 기다려 주세요.');
+            await up.idle();
+          }
+          const body = { head: headSel ? headSel.value : '', title: title.value, content: ta.value, images: up.ids(), hp: hp.value };
+          let res;
+          if (data) {
+            res = await call('apiUpdatePost', Object.assign(body, { id: data.id, pw: edit.pw }));
+          } else {
+            store.set('nick', nick.value.trim());
+            res = await call('apiCreatePost', Object.assign(body, { g: g.id, nick: nick.value, pw: pw.value }));
+          }
+          sent = true;
+          state.edit = null;
+          toast(data ? '글을 고쳤습니다.' : '글을 등록했습니다.');
+          go({ page: 'view', g: res.g, id: res.id }, { replace: true, force: true });
+        } catch (err) {
+          toast(err.message, 'error');
+        } finally {
+          submit.disabled = false;
+        }
+      },
+    },
+      h('h3', null, g.name + ' 갤러리 ' + (data ? '글 수정' : '글쓰기')),
+      h('div', { class: 'w-row' }, nick, pw,
+        !data && !state.admin ? h('span', { class: 'w-me', title: '이 기기의 식별코드' }) : null),
+      h('div', { class: 'w-row' }, headSel, title),
+      ta,
+      up.el,
+      hp,
+      h('p', { class: 'w-help' }, '사진은 글 하나에 ' + L.maxImages + '장, 한 장에 ' + L.maxImageMB + 'MB까지 올릴 수 있어요. 큰 사진은 자동으로 줄여서 올립니다. (위치 정보 등 사진 정보는 지워집니다. GIF는 원본 그대로)'),
+      h('div', { class: 'w-actions' },
+        h('button', { class: 'btn', type: 'button', onclick: () => go(cancelRoute) }, '취소'),
+        submit));
+    nick.addEventListener('input', refreshWriterHint);
+    setKids(main, galleryHead(g), form);
+    refreshWriterHint();
+    if (!data && window.matchMedia && window.matchMedia('(min-width: 761px)').matches) title.focus();
+  }
+
+  /** 글쓰기 화면의 "표시: 닉네임(식별코드)" 안내. 식별코드는 첫 화면이 뜬 뒤에 도착할 수 있습니다. */
+  function refreshWriterHint() {
+    const me = $('.w-me');
+    const nick = $('.w-nick');
+    if (me) me.textContent = state.code ? '표시: ' + ((nick && nick.value.trim()) || L.defaultNick) + '(' + state.code + ')' : '';
+  }
+
+  function isImageFile(f) {
+    return /^image\//.test(f.type || '') || /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i.test(f.name || '');
+  }
+
+  function hasFiles(e) {
+    const types = (e.dataTransfer && e.dataTransfer.types) || [];
+    return Array.prototype.indexOf.call(types, 'Files') >= 0;
+  }
+
+  /** 본문 커서 위치에 [사진N] 을 넣습니다. (항상 한 줄을 차지하게) */
+  function insertTokens(ta, tokens) {
+    const v = ta.value;
+    let s = v.length;
+    let e = v.length;
+    if (ta.dataset.touched && typeof ta.selectionStart === 'number') {
+      s = ta.selectionStart;
+      e = ta.selectionEnd;
+    }
+    const before = v.slice(0, s);
+    const after = v.slice(e);
+    const ins = (before && before.slice(-1) !== '\n' ? '\n' : '') + tokens.join('\n') + (after.charAt(0) === '\n' ? '' : '\n');
+    ta.value = before + ins + after;
+    const caret = before.length + ins.length;
+    try { ta.setSelectionRange(caret, caret); } catch (err) { /* 무시 */ }
+    ta.dataset.touched = '1';
+    ta.dispatchEvent(new Event('input'));
+  }
+
+  /** idx 번째 사진을 뺄 때 본문의 [사진N] 번호를 하나씩 당깁니다. */
+  function renumberTokens(text, idx) {
+    return text.replace(/\[사진(\d{1,2})\]\n?/g, (all, n) => {
+      const i = Number(n) - 1;
+      if (i === idx) return '';
+      if (i > idx) return '[사진' + i + ']' + (all.slice(-1) === '\n' ? '\n' : '');
+      return all;
+    });
+  }
+
+  function uploader(ta, initial) {
+    const items = (initial || []).map((img) => ({ status: 'done', image: img, preview: '', pic: null }));
+    const initialIds = items.map((x) => x.image.id).join(',');
+    let queue = [];
+    let active = 0;
+    let waiters = [];
+    const grid = h('div', { class: 'upl-grid' });
+    const info = h('span', { class: 'upl-info' });
+    const input = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'file-input' });
+    input.addEventListener('change', () => {
+      addFiles(input.files);
+      input.value = '';
+    });
+    const box = h('div', { class: 'upl' },
+      h('div', { class: 'upl-bar' },
+        h('button', { class: 'btn', type: 'button', onclick: () => input.click() }, icon('camera'), '사진 첨부'),
+        info,
+        h('span', { class: 'upl-tip' }, '드래그 앤 드롭 · 붙여넣기(Ctrl+V)도 됩니다')),
+      input,
+      grid);
+
+    ta.addEventListener('focus', () => { ta.dataset.touched = '1'; });
+    ta.addEventListener('paste', (e) => {
+      const files = Array.prototype.slice.call((e.clipboardData && e.clipboardData.files) || []).filter(isImageFile);
+      if (files.length) {
+        e.preventDefault();
+        addFiles(files);
+      }
+    });
+    [box, ta].forEach((zone) => {
+      zone.addEventListener('dragover', (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        box.classList.add('drag');
+      });
+      zone.addEventListener('dragleave', () => box.classList.remove('drag'));
+      zone.addEventListener('drop', (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        box.classList.remove('drag');
+        addFiles(e.dataTransfer.files);
+      });
+    });
+
+    function addFiles(list) {
+      const files = Array.prototype.slice.call(list || []).filter(isImageFile);
+      if (!files.length) {
+        toast('사진 파일만 올릴 수 있습니다.', 'error');
+        return;
+      }
+      const room = L.maxImages - items.length;
+      if (room <= 0) {
+        toast('사진은 글 하나에 ' + L.maxImages + '장까지 올릴 수 있습니다.', 'error');
+        return;
+      }
+      if (files.length > room) toast('사진은 ' + L.maxImages + '장까지라서 ' + room + '장만 올립니다.');
+      const tokens = [];
+      files.slice(0, room).forEach((file) => {
+        let preview = '';
+        try { preview = URL.createObjectURL(file); } catch (e) { preview = ''; }
+        const item = { status: 'queued', file: file, image: null, preview: preview, pic: null };
+        items.push(item);
+        queue.push(item);
+        tokens.push('[사진' + items.length + ']');
+      });
+      insertTokens(ta, tokens);
+      pump();
+    }
+
+    function pump() {
+      while (active < 2 && queue.length) {
+        const item = queue.shift();
+        active++;
+        item.status = 'uploading';
+        uploadOne(item)
+          .then(() => { item.status = 'done'; }, (err) => {
+            toast(err.message, 'error');
+            remove(item);
+          })
+          .then(() => {
+            active--;
+            pump();
+            settle();
+          });
+      }
+      draw();
+    }
+
+    async function uploadOne(item) {
+      const prepared = await prepareImage(item.file);
+      const data = await blobToBase64(prepared.blob);
+      item.image = await call('apiUploadImage', { data: data, mime: prepared.mime, w: prepared.w, h: prepared.h }, { quiet: true });
+    }
+
+    function remove(item) {
+      const idx = items.indexOf(item);
+      if (idx < 0) return;
+      items.splice(idx, 1);
+      queue = queue.filter((x) => x !== item);
+      ta.value = renumberTokens(ta.value, idx);
+      draw();
+      settle();
+    }
+
+    function draw() {
+      const uploading = items.filter((x) => x.status !== 'done').length;
+      info.textContent = items.length + ' / ' + L.maxImages + '장' + (uploading ? ' · ' + uploading + '장 올리는 중…' : '');
+      setKids(grid, items.map((item, i) => {
+        if (!item.pic) item.pic = item.preview ? h('img', { src: item.preview, alt: '' }) : imageEl(item.image, 400);
+        return h('div', { class: 'upl-tile ' + item.status },
+          item.pic,
+          h('span', { class: 'upl-no' }, '사진' + (i + 1)),
+          item.status !== 'done' ? h('span', { class: 'upl-state' }, item.status === 'queued' ? '대기 중' : '올리는 중…') : null,
+          h('button', { class: 'upl-del', type: 'button', title: '사진 빼기', 'aria-label': '사진' + (i + 1) + ' 빼기', onclick: () => remove(item) }, '×'),
+          item.status === 'done' ? h('button', { class: 'upl-put', type: 'button', onclick: () => insertTokens(ta, ['[사진' + (i + 1) + ']']) }, '본문에 넣기') : null);
+      }));
+    }
+
+    function pending() {
+      return items.some((x) => x.status !== 'done');
+    }
+
+    function settle() {
+      if (pending()) return;
+      const w = waiters;
+      waiters = [];
+      w.forEach((fn) => fn());
+    }
+
+    draw();
+    return {
+      el: box,
+      ids: () => items.filter((x) => x.status === 'done' && x.image).map((x) => x.image.id),
+      count: () => items.length,
+      pending: pending,
+      idle: () => (pending() ? new Promise((resolve) => waiters.push(resolve)) : Promise.resolve()),
+      changed: () => items.map((x) => (x.image ? x.image.id : '?')).join(',') !== initialIds,
+    };
+  }
+
+  /** 큰 사진은 긴 변 1600px JPEG로 줄이고(위치 정보 같은 EXIF도 사라짐), GIF는 그대로 올립니다. */
+  async function prepareImage(file) {
+    const maxBytes = L.maxImageMB * 1024 * 1024;
+    const type = String(file.type || '').toLowerCase();
+    if (type === 'image/gif') {
+      if (file.size > maxBytes) throw new Error('GIF는 ' + L.maxImageMB + 'MB까지 올릴 수 있습니다.');
+      const size = await imageSize(file).catch(() => ({ w: 0, h: 0 }));
+      return { blob: file, mime: 'image/gif', w: size.w, h: size.h };
+    }
+    const loaded = await loadImage(file);
+    try {
+      const w0 = loaded.img.naturalWidth;
+      const h0 = loaded.img.naturalHeight;
+      if (!w0 || !h0) throw new Error('사진을 읽을 수 없습니다.');
+      let scale = Math.min(1, MAX_SIDE / Math.max(w0, h0));
+      if (type === 'image/png') {
+        const w = Math.max(1, Math.round(w0 * scale));
+        const hh = Math.max(1, Math.round(h0 * scale));
+        const png = await drawTo(loaded.img, w, hh, 'image/png');
+        if (png.size <= Math.min(maxBytes, 1.5 * 1024 * 1024)) return { blob: png, mime: 'image/png', w: w, h: hh };
+      }
+      let quality = 0.88;
+      for (let tries = 0; tries < 10; tries++) {
+        const w = Math.max(1, Math.round(w0 * scale));
+        const hh = Math.max(1, Math.round(h0 * scale));
+        const jpg = await drawTo(loaded.img, w, hh, 'image/jpeg', quality, true);
+        if (jpg.size <= maxBytes) return { blob: jpg, mime: 'image/jpeg', w: w, h: hh };
+        if (quality > 0.65) quality -= 0.1;
+        else scale *= 0.8;
+      }
+      throw new Error('사진 용량이 너무 큽니다.');
+    } finally {
+      URL.revokeObjectURL(loaded.url);
+    }
+  }
+
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      let url;
+      try {
+        url = URL.createObjectURL(file);
+      } catch (e) {
+        reject(new Error('사진을 읽을 수 없습니다.'));
+        return;
+      }
+      const img = new Image();
+      img.onload = () => resolve({ img: img, url: url });
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('이 사진 형식은 읽을 수 없습니다. JPG나 PNG로 바꿔서 올려 주세요.'));
+      };
+      img.src = url;
+    });
+  }
+
+  function imageSize(file) {
+    return loadImage(file).then((x) => {
+      const size = { w: x.img.naturalWidth, h: x.img.naturalHeight };
+      URL.revokeObjectURL(x.url);
+      return size;
+    });
+  }
+
+  function drawTo(img, w, hh, mime, quality, whiteBg) {
+    return new Promise((resolve, reject) => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = hh;
+      const ctx = c.getContext('2d');
+      if (whiteBg) {
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, w, hh);
+      }
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, w, hh);
+      c.toBlob((b) => (b ? resolve(b) : reject(new Error('사진을 변환하지 못했습니다.'))), mime, quality);
+    });
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, ''));
+      r.onerror = () => reject(new Error('파일을 읽지 못했습니다.'));
+      r.readAsDataURL(blob);
+    });
+  }
+
+  /* ───────────────────────── 관리자 ───────────────────────── */
+
+  async function adminLogin() {
+    const v = await dialog({
+      title: '관리자 로그인',
+      message: '스크립트 편집기에서 setup 을 실행하면 로그에 관리자 키가 나옵니다.\n(스크립트 주인 구글 계정으로 접속하면 로그인 없이 관리자입니다.)',
+      fields: [{ name: 'key', label: '관리자 키', type: 'password' }],
+      ok: '로그인',
+    });
+    if (!v || !v.key) return;
+    try {
+      const res = await call('apiAdminLogin', { key: v.key });
+      state.token = res.token;
+      store.set('adminToken', res.token);
+      state.admin = true;
+      renderTopRight();
+      renderFoot();
+      toast('관리자 모드로 바꿨습니다.');
+      const r = state.route || { page: 'home' };
+      if (r.page !== 'write' && r.page !== 'edit') render(r); // 쓰던 글은 날리지 않음
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function adminLogout() {
+    if (state.token) call('apiAdminLogout', {}, { quiet: true }).catch(() => {});
+    dropAdmin();
+    toast('로그아웃했습니다.');
+    render(state.route || { page: 'home' });
+  }
+
+  function dropAdmin() {
+    state.token = '';
+    store.del('adminToken');
+    state.admin = state.owner;
+    renderTopRight();
+    renderFoot();
+  }
+
+  async function pageAdmin(main, seq) {
+    if (!state.admin) {
+      setKids(main, h('div', { class: 'box error-box' },
+        h('p', null, '관리자만 볼 수 있는 페이지입니다.'),
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: adminLogin }, '관리자 로그인')));
+      return;
+    }
+    setKids(main, loadingBox());
+    const res = await call('apiAdminInfo', {});
+    if (stale(seq)) return;
+    setGalleries(res.galleries);
+    setKids(main, h('div', { class: 'admin' },
+      h('h2', null, '관리자 페이지'),
+      h('section', { class: 'box' }, boxTitle('데이터'),
+        h('div', { class: 'admin-body' },
+          h('div', { class: 'admin-links' },
+            h('a', { class: 'btn', href: res.sheetUrl, target: '_blank', rel: 'noopener' }, '데이터 스프레드시트 열기'),
+            h('a', { class: 'btn', href: res.folderUrl, target: '_blank', rel: 'noopener' }, '드라이브 폴더 열기')),
+          h('p', { class: 'muted' }, res.owner
+            ? '스크립트 주인 계정으로 접속해서 자동으로 관리자입니다.'
+            : '관리자 키로 로그인했습니다. (6시간 뒤 자동 로그아웃)'))),
+      galleryAdmin(res.galleries),
+      banAdmin(res.bans),
+      h('section', { class: 'box' }, boxTitle('도움말'),
+        h('div', { class: 'admin-body' }, h('ul', { class: 'admin-help' },
+          h('li', null, '글을 열면 아래 빨간 "관리" 막대에서 공지 올리기/내리기, 작성자 차단을 할 수 있습니다. 관리자는 비밀번호 없이 글·댓글을 지울 수 있습니다.'),
+          h('li', null, '갤러리를 숨기면 관리자에게만 보입니다. 갤러리 ID는 주소에 쓰이므로 만든 뒤에는 바꿀 수 없습니다.'),
+          h('li', null, '말머리는 쉼표(,)로 구분합니다. 개념글 기준은 추천 수입니다.'),
+          h('li', null, '관리자 키를 바꾸려면 스크립트 편집기에서 resetAdminKey 를 실행하세요.'))))));
+  }
+
+  function galleryAdmin(list) {
+    const rows = list.map((g) => {
+      const f = {
+        name: h('input', { class: 'inp', value: g.name, maxlength: 30, 'aria-label': '이름' }),
+        desc: h('input', { class: 'inp', value: g.desc, maxlength: 100, 'aria-label': '설명' }),
+        heads: h('input', { class: 'inp', value: (g.heads || []).join(','), placeholder: '일반,정보,질문', 'aria-label': '말머리' }),
+        threshold: h('input', { class: 'inp n', type: 'number', min: 1, max: 1000, value: g.threshold, 'aria-label': '개념글 기준' }),
+        order: h('input', { class: 'inp n', type: 'number', value: g.order, 'aria-label': '순서' }),
+        hidden: h('input', { type: 'checkbox', checked: !!g.hidden }),
+      };
+      const save = h('button', {
+        class: 'btn btn-sm btn-primary', type: 'button',
+        onclick: async () => {
+          save.disabled = true;
+          try {
+            const res = await call('apiAdminSaveGallery', {
+              gallery: { id: g.id, name: f.name.value, desc: f.desc.value, heads: f.heads.value, threshold: f.threshold.value, order: f.order.value, hidden: f.hidden.checked },
+            });
+            setGalleries(res.galleries);
+            toast('저장했습니다.');
+          } catch (e) {
+            toast(e.message, 'error');
+          } finally {
+            save.disabled = false;
+          }
+        },
+      }, '저장');
+      return h('tr', null,
+        h('td', null, h('code', null, g.id)), h('td', null, f.name), h('td', null, f.desc), h('td', null, f.heads),
+        h('td', null, f.threshold), h('td', null, f.order), h('td', null, h('label', null, f.hidden, ' 숨김')), h('td', null, save));
+    });
+    const nf = {
+      id: h('input', { class: 'inp', placeholder: '예: game', maxlength: 20 }),
+      name: h('input', { class: 'inp', placeholder: '예: 게임', maxlength: 30 }),
+      desc: h('input', { class: 'inp', placeholder: '한 줄 소개', maxlength: 100 }),
+      heads: h('input', { class: 'inp', placeholder: '일반,정보,질문' }),
+      threshold: h('input', { class: 'inp', type: 'number', min: 1, max: 1000, value: 5 }),
+    };
+    const create = h('button', {
+      class: 'btn btn-primary', type: 'button',
+      onclick: async () => {
+        create.disabled = true;
+        try {
+          const res = await call('apiAdminSaveGallery', {
+            create: true,
+            gallery: { id: nf.id.value, name: nf.name.value, desc: nf.desc.value, heads: nf.heads.value, threshold: nf.threshold.value },
+          });
+          setGalleries(res.galleries);
+          toast('갤러리를 만들었습니다.');
+          render(state.route);
+        } catch (e) {
+          toast(e.message, 'error');
+        } finally {
+          create.disabled = false;
+        }
+      },
+    }, '만들기');
+    const field = (label, el) => h('label', null, label, el);
+    return h('section', { class: 'box' }, boxTitle('갤러리 관리'),
+      h('div', { class: 'admin-body' },
+        h('div', { class: 'scroll-x' }, h('table', { class: 'admin-table' },
+          h('thead', null, h('tr', null, ['ID', '이름', '설명', '말머리', '개념글 기준', '순서', '', ''].map((t) => h('th', null, t)))),
+          h('tbody', null, rows))),
+        h('h4', null, '새 갤러리 만들기'),
+        h('div', { class: 'gal-form' },
+          field('ID (영문 소문자)', nf.id), field('이름', nf.name), field('설명', nf.desc),
+          field('말머리 (쉼표로 구분)', nf.heads), field('개념글 기준 추천 수', nf.threshold), create)));
+  }
+
+  function banAdmin(bans) {
+    const body = h('tbody');
+    const draw = (list) => setKids(body, list.length ? list.map((b) => h('tr', null,
+      h('td', null, '(' + b.code + ')'),
+      h('td', null, b.reason || '-'),
+      h('td', null, b.until ? fmtFull(b.until) + '까지' : '영구'),
+      h('td', null, b.active ? '차단 중' : '기간 끝남'),
+      h('td', null, h('button', {
+        class: 'btn btn-sm', type: 'button',
+        onclick: async () => {
+          try {
+            const res = await call('apiAdminUnban', { target: b.target });
+            draw(res.bans);
+            toast('차단을 풀었습니다.');
+          } catch (e) {
+            toast(e.message, 'error');
+          }
+        },
+      }, '해제'))))
+      : h('tr', null, h('td', { colspan: 5, class: 'muted' }, '차단한 사용자가 없습니다.')));
+    draw(bans);
+    return h('section', { class: 'box' }, boxTitle('차단 목록'),
+      h('div', { class: 'admin-body scroll-x' }, h('table', { class: 'admin-table' },
+        h('thead', null, h('tr', null, ['식별코드', '사유', '기간', '상태', ''].map((t) => h('th', null, t)))),
+        body)));
+  }
+
+  /* ───────────────────────── 시작 ───────────────────────── */
+
+  function start() {
+    if (!BOOT.ok) {
+      setKids($('#app'), h('div', { class: 'main' }, h('div', { class: 'box error-box' },
+        h('p', null, h('b', null, '사이트를 준비하지 못했습니다.')),
+        h('p', null, BOOT.error || ''),
+        h('p', { class: 'muted' }, '운영자라면 스크립트 편집기에서 setup 함수를 한 번 실행했는지 확인해 주세요.'))));
+      return;
+    }
+    shell();
+    const hist = window.google && google.script && google.script.history;
+    if (hist && hist.setChangeHandler) {
+      hist.setChangeHandler((e) => {
+        const st = e && e.state;
+        const next = st && st.page ? st : routeFromParams((e && e.location && e.location.parameter) || {});
+        if (state.leaveGuard && state.leaveGuard()) {
+          // 뒤로 가기로 주소가 이미 바뀌었으니, 쓰던 화면 주소를 다시 넣고 물어봅니다.
+          const here = state.route;
+          try { hist.push(here, paramsFromRoute(here)); } catch (err) { /* 무시 */ }
+          dialog({ title: '페이지 이동', message: '작성 중인 내용이 사라집니다. 이동할까요?', ok: '이동', danger: true })
+            .then((ok) => { if (ok) go(next, { force: true }); });
+          return;
+        }
+        render(next);
+      });
+    }
+    window.addEventListener('beforeunload', (e) => {
+      if (state.leaveGuard && state.leaveGuard()) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+    render(routeFromParams(BOOT.params || {}));
+    call('apiMe', {}, { quiet: true }).then((me) => {
+      const was = state.admin;
+      state.code = me.code || '';
+      state.owner = !!me.owner;
+      if (!me.admin && state.token) {
+        state.token = '';
+        store.del('adminToken');
+      }
+      state.admin = !!me.admin;
+      renderTopRight();
+      renderFoot();
+      refreshWriterHint();
+      const r = state.route || {};
+      if (was !== state.admin && r.page !== 'write' && r.page !== 'edit') render(r);
+    }).catch(() => { /* 식별코드 표시는 선택 사항 */ });
+  }
+
+  start();
+})();
+</script>

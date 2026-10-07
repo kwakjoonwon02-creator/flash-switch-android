@@ -1,0 +1,14 @@
+{
+  "name": "gas-gallery-community",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Google Apps Script만으로 돌아가는 디시인사이드 스타일 익명 갤러리 커뮤니티 (이 파일은 로컬 테스트용, 배포에는 src/ 만 필요)",
+  "scripts": {
+    "test": "node --test test/server.test.js",
+    "dev": "node dev/server.js",
+    "dev:owner": "OWNER=1 node dev/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
