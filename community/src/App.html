@@ -644,27 +644,77 @@
     return frag;
   }
 
+  /**
+   * 본문 사진. GIF는 먼저 정지 화면(드라이브 썸네일)을 보여 주고, 누르면 움직이는 원본을 서버에서 받아 옵니다.
+   * (방문자 모두가 주인 계정의 실행 한도를 나눠 쓰므로 움짤을 자동으로 전부 받아 오지 않습니다)
+   */
   function figure(img) {
-    const el = imageEl(img, 1600);
+    const gif = img.mime === 'image/gif';
+    // 이모티콘처럼 작은 GIF는 재생 버튼보다 작으니 바로 움직이게 합니다.
+    const tiny = img.w > 0 && img.h > 0 && (img.w < 160 || img.h < 100);
+    const el = imageEl(img, 1600, gif && tiny);
+    const wrap = h('div', { class: 'vimg' }, el);
+    let play = null;
+    if (gif && img.pub && !tiny) {
+      play = h('button', { class: 'gif-play', type: 'button', 'aria-label': '움짤 재생' }, 'GIF ▶');
+      wrap.classList.add('is-gif');
+      wrap.appendChild(play);
+      play.addEventListener('click', (e) => {
+        e.stopPropagation();
+        play.disabled = true;
+        play.textContent = '불러오는 중…';
+        viaScript(img.id).then((src) => {
+          el.dataset.animated = '1';
+          el.src = src;
+          play.remove();
+        }, () => {
+          play.disabled = false;
+          play.textContent = '다시 시도 ▶';
+        });
+      });
+      // 정지 화면을 못 불러와 이미 원본을 받았으면 재생 버튼이 필요 없음
+      el.addEventListener('load', () => { if (el.dataset.animated === '1' && play.parentNode) play.remove(); });
+    }
     el.addEventListener('click', () => {
-      if (el.classList.contains('loaded')) openLightbox(el.currentSrc || el.src, img);
+      if (!el.classList.contains('loaded')) return;
+      if (play && play.parentNode && !play.disabled) play.click();
+      else openLightbox(el.currentSrc || el.src, img);
     });
-    return h('div', { class: 'vimg' }, el);
+    return wrap;
   }
 
   const dataUrls = new Map();
+  const scriptQueue = [];
+  let scriptBusy = 0;
+  /** 서버에서 사진 원본을 받아 옵니다. 모든 방문자가 주인 계정의 동시 실행 한도(30개)를 나눠 쓰므로 한 번에 2장까지만. */
   function viaScript(id) {
     if (!dataUrls.has(id)) {
-      const p = call('apiImage', { id: id }, { quiet: true }).then((res) => 'data:' + res.mime + ';base64,' + res.data);
+      const p = new Promise((resolve, reject) => {
+        scriptQueue.push({ id: id, resolve: resolve, reject: reject });
+        pumpScript();
+      });
       p.catch(() => dataUrls.delete(id));
       dataUrls.set(id, p);
     }
     return dataUrls.get(id);
   }
 
-  /** 공개 사진은 구글 드라이브 썸네일 주소로, 안 되면(또는 GIF면) 서버에서 받아서 보여 줍니다. */
+  function pumpScript() {
+    while (scriptBusy < 2 && scriptQueue.length) {
+      const job = scriptQueue.shift();
+      scriptBusy++;
+      call('apiImage', { id: job.id }, { quiet: true })
+        .then((res) => job.resolve('data:' + res.mime + ';base64,' + res.data), job.reject)
+        .then(() => {
+          scriptBusy--;
+          pumpScript();
+        });
+    }
+  }
+
+  /** 공개 사진은 구글 드라이브 썸네일 주소로 보여 주고(GIF는 정지 화면), 안 되면 서버에서 받아 옵니다. */
   function driveUrls(img, size) {
-    if (!img.pub || img.mime === 'image/gif') return [];
+    if (!img.pub) return [];
     const id = encodeURIComponent(img.id);
     return [
       'https://drive.google.com/thumbnail?id=' + id + '&sz=w' + size,
@@ -693,13 +743,13 @@
     observer.observe(el);
   }
 
-  function imageEl(img, size) {
+  function imageEl(img, size, original) {
     const el = h('img', { alt: '첨부 사진', decoding: 'async', referrerpolicy: 'no-referrer' });
     if (img.w > 0 && img.h > 0) {
       el.width = img.w;
       el.height = img.h;
     }
-    const urls = driveUrls(img, size);
+    const urls = original ? [] : driveUrls(img, size);
     let i = 0;
     let scripted = false;
     const broken = () => {
@@ -716,7 +766,10 @@
         return;
       }
       scripted = true;
-      viaScript(img.id).then((src) => { el.src = src; }, broken);
+      viaScript(img.id).then((src) => {
+        el.dataset.animated = '1';
+        el.src = src;
+      }, broken);
     };
     el.addEventListener('error', next);
     el.addEventListener('load', () => el.classList.add('loaded'));
@@ -789,13 +842,31 @@
   async function pageView(main, r, seq) {
     const known = findGallery(r.g);
     setKids(main, known ? galleryHead(known) : null, loadingBox());
-    const res = await call('apiView', { id: r.id, list: { p: r.p, mode: r.mode, head: r.head, st: r.st, q: r.q } });
+    const res = await call('apiView', { id: r.id, seen: seenRecently(r.id), list: { p: r.p, mode: r.mode, head: r.head, st: r.st, q: r.q } });
     if (stale(seq)) return;
     if (res.gallery.id !== r.g) {
       r.g = res.gallery.id;
       renderGnb();
     }
     setKids(main, galleryHead(res.gallery), viewSection(res, r), res.list ? listSection(res.list, res.post.id) : null);
+  }
+
+  const VIEW_MEMORY_MS = 6 * 3600 * 1000;
+  /** 이 브라우저가 6시간 안에 본 글인지. 서버 캐시 대신 브라우저에 기억해서 조회수 중복을 막습니다. */
+  function seenRecently(id) {
+    let map = {};
+    try { map = JSON.parse(store.get('views') || '{}') || {}; } catch (e) { map = {}; }
+    const now = Date.now();
+    const seen = typeof map[id] === 'number' && now - map[id] < VIEW_MEMORY_MS;
+    const next = {};
+    Object.keys(map)
+      .filter((k) => typeof map[k] === 'number' && now - map[k] < VIEW_MEMORY_MS)
+      .sort((a, b) => map[b] - map[a])
+      .slice(0, 300)
+      .forEach((k) => { next[k] = map[k]; });
+    if (!seen) next[id] = now;
+    store.set('views', JSON.stringify(next));
+    return seen;
   }
 
   function viewSection(res, r) {
@@ -962,7 +1033,7 @@
           box = null;
           return;
         }
-        box = h('div', { class: 'reply-box' }, commentForm(post.id, c.parent || c.id, update, true));
+        box = h('div', { class: 'reply-box' }, commentForm(post.id, c.id, update, true));
         li.appendChild(box);
         const ta = box.querySelector('textarea');
         if (ta) ta.focus();
@@ -1266,7 +1337,7 @@
     }
 
     function pump() {
-      while (active < 3 && queue.length) {
+      while (active < 2 && queue.length) {
         const item = queue.shift();
         active++;
         item.status = 'uploading';
@@ -1607,7 +1678,16 @@
     if (hist && hist.setChangeHandler) {
       hist.setChangeHandler((e) => {
         const st = e && e.state;
-        render(st && st.page ? st : routeFromParams((e && e.location && e.location.parameter) || {}));
+        const next = st && st.page ? st : routeFromParams((e && e.location && e.location.parameter) || {});
+        if (state.leaveGuard && state.leaveGuard()) {
+          // 뒤로 가기로 주소가 이미 바뀌었으니, 쓰던 화면 주소를 다시 넣고 물어봅니다.
+          const here = state.route;
+          try { hist.push(here, paramsFromRoute(here)); } catch (err) { /* 무시 */ }
+          dialog({ title: '페이지 이동', message: '작성 중인 내용이 사라집니다. 이동할까요?', ok: '이동', danger: true })
+            .then((ok) => { if (ok) go(next, { force: true }); });
+          return;
+        }
+        render(next);
       });
     }
     window.addEventListener('beforeunload', (e) => {

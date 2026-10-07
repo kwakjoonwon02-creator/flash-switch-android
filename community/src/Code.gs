@@ -29,9 +29,16 @@ const CONFIG = {
   POST_COOLDOWN_SEC: 20,         // 도배 방지: 같은 기기의 글 작성 간격
   COMMENT_COOLDOWN_SEC: 5,       // 도배 방지: 같은 기기의 댓글 작성 간격
   UPLOADS_PER_10MIN: 60,         // 같은 기기가 10분 동안 올릴 수 있는 사진 수
+  // 사이트 전체 한도: 식별값을 바꿔 가며 도배해도 이 이상은 못 올림 (관리자는 제외)
+  SITE_POSTS_PER_10MIN: 60,
+  SITE_COMMENTS_PER_10MIN: 300,
+  SITE_UPLOAD_MB_PER_DAY: 1024,  // 하루 동안 사이트 전체에 올라오는 사진 용량 (구글 드라이브 15GB 보호)
+  SITE_UPLOADS_PER_DAY: 3000,
   BEST_HOURS: 72,                // 실시간 베스트 집계 기간(시간)
   BEST_COUNT: 10,
   RESERVED_NICKS: ['운영자', '관리자', 'admin'], // 관리자가 아니면 닉네임에 쓸 수 없는 단어
+  // 공유 주소가 .../dev 로 나오면 배포한 웹 앱 주소(.../exec)를 여기에 넣으세요. 비워 두면 자동.
+  WEB_APP_URL: '',
   // 처음 setup 때 만들어지는 갤러리 (이후에는 관리자 페이지나 galleries 시트에서 수정)
   GALLERIES: [
     { id: 'free', name: '자유', desc: '아무 이야기나 자유롭게', heads: ['일반', '정보', '질문', '사진'], threshold: 5 },
@@ -91,7 +98,7 @@ function doGet(e) {
     boot = {
       ok: true,
       site: { name: CONFIG.SITE_NAME, desc: CONFIG.SITE_DESC },
-      url: serviceUrl_(),
+      url: webAppUrl_(),
       params: params,
       galleries: galleries,
       owner: owner,
@@ -130,11 +137,17 @@ function doGet(e) {
  * 결과(관리자 키 포함)를 실행 로그에 보여 줍니다. 여러 번 실행해도 안전합니다.
  */
 function setup() {
+  // 시트·폴더를 지우고 스크립트 속성을 고친 뒤 다시 실행하는 경우를 위해 캐시된 속성을 버립니다.
+  resetPropsCache_();
+  // 이미 설정된 뒤에는 주인만 실행할 수 있습니다. (공개 함수라 방문자도 google.script.run 으로 부를 수 있음)
+  if (isReady_(PropertiesService.getScriptProperties().getProperties()) && !isOwner_()) {
+    throw new Error('스크립트 편집기에서 직접 실행해 주세요.');
+  }
   const p = ensureReady_();
-  const ss = SpreadsheetApp.openById(p.SPREADSHEET_ID);
+  const ss = openSpreadsheet_(p.SPREADSHEET_ID);
   withLock_(function () { ensureSchema_(ss); }, 30000);
   installTriggers_();
-  const url = serviceUrl_();
+  const url = webAppUrl_();
   [
     '✅ 설정이 끝났습니다.',
     '· 데이터 스프레드시트: ' + ss.getUrl(),
@@ -155,24 +168,26 @@ function resetAdminKey() {
   console.log('🔑 새 관리자 키: ' + key);
 }
 
-/** 글에 붙지 않은 채 하루가 지난 사진을 정리합니다. setup() 이 매일 새벽 실행되도록 등록합니다. */
+/** 글에 붙지 않은 채 하루가 지난 사진(쓰다 만 글)을 정리합니다. setup() 이 6시간마다 실행되도록 등록합니다. */
 function cleanupOrphanImages() {
   const cache = CacheService.getScriptCache();
   if (cache.get('cleanup:running')) return;
-  cache.put('cleanup:running', '1', 600);
+  cachePut_('cleanup:running', '1', 600);
   const cutoff = Date.now() - DAY_MS;
-  withLock_(function () {
+  // 잠금 안에서는 삭제 표시만 하고(빠름), 드라이브 휴지통 이동은 잠금 밖에서 합니다.
+  const ids = withLock_(function () {
     const sh = sheet_('images');
     const last = sh.getLastRow();
-    if (last < 2) return;
+    if (last < 2) return [];
     const rows = sh.getRange(2, 1, last - 1, SCHEMA.images.length).getValues();
-    const ids = [];
+    const found = [];
     rows.forEach(function (r) {
-      if (ids.length < 200 && !num_(r[I.postId]) && !bool_(r[I.deleted]) && num_(r[I.createdAt]) < cutoff) ids.push(str_(r[I.id]));
+      if (found.length < 1000 && !num_(r[I.postId]) && !bool_(r[I.deleted]) && num_(r[I.createdAt]) < cutoff) found.push(str_(r[I.id]));
     });
-    discardImages_(ids);
-    if (ids.length) console.log('정리한 사진: ' + ids.length + '장');
+    return markImagesDeleted_(found);
   }, 30000);
+  trashFiles_(ids);
+  if (ids.length) console.log('정리한 사진: ' + ids.length + '장');
 }
 
 /* ───────────────────────────── 공개 API (google.script.run) ───────────────────────────── */
@@ -239,16 +254,12 @@ function apiView(req) {
     if (!found || bool_(found.r[P.deleted])) fail_('삭제되었거나 존재하지 않는 글입니다.');
     const m = toMeta_(found.r, found.row);
     const g = gallery_(m.g, admin);
-    // 조회수: 같은 기기는 6시간에 한 번만 올라갑니다.
-    const dev = deviceOrNull_(req);
-    if (dev) {
-      const cache = CacheService.getScriptCache();
-      const key = 'view:' + m.id + ':' + dev.hash.slice(0, 20);
-      if (!cache.get(key)) {
-        cache.put(key, '1', 21600);
-        m.views += 1;
-        sheet_('posts').getRange(found.row, P.views + 1).setValue(m.views);
-      }
+    // 조회수: 같은 브라우저의 6시간 안 재방문은 브라우저가 seen 으로 알려 줍니다.
+    // (서버 캐시에 글×기기마다 기록하면 CacheService 항목 한도(약 1000개)를 금방 채워
+    //  도배 방지 같은 다른 기록이 밀려나기 때문에 서버에는 남기지 않습니다.)
+    if (!req.seen && deviceOrNull_(req)) {
+      m.views += 1;
+      sheet_('posts').getRange(found.row, P.views + 1).setValue(m.views);
     }
     const post = publicMeta_(m);
     post.updatedAt = num_(found.r[P.updatedAt]);
@@ -260,7 +271,10 @@ function apiView(req) {
   });
 }
 
-/** 사진 한 장을 Drive에 저장합니다. 글 작성 전에 사진마다 따로 호출합니다. */
+/**
+ * 사진 한 장을 Drive에 비공개로 저장합니다. (글 작성 전에 사진마다 따로 호출)
+ * 글에 붙을 때 공개되므로, 글에 안 쓴 파일이 공개 이미지 호스팅처럼 쓰이지 않습니다.
+ */
 function apiUploadImage(req) {
   return run_(function () {
     req = obj_(req);
@@ -285,36 +299,31 @@ function apiUploadImage(req) {
     if (bytes.length > maxBytes) fail_(tooBig);
     const mime = sniffImage_(bytes);
     if (!mime) fail_('jpg, png, gif, webp 사진만 올릴 수 있습니다.');
+    if (!admin) checkUploadBudget_(bytes.length);
     const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' }[mime];
     const file = imageFolder_().createFile(Utilities.newBlob(bytes, mime, 'img_' + Date.now() + '_' + dev.code + '.' + ext));
-    // "링크가 있는 모든 사용자" 공유가 막힌 계정(일부 회사/학교 계정)이면 서버를 거쳐서 보여 줍니다.
-    let pub = false;
-    try {
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      pub = true;
-    } catch (e) {
-      pub = false;
-    }
     const id = file.getId();
     const w = clampInt_(req.w, 0, 30000);
     const h = clampInt_(req.h, 0, 30000);
-    withLock_(function () {
-      sheet_('images').appendRow([enc_(id), 0, enc_(dev.hash), enc_(mime), w, h, bytes.length, pub, Date.now(), false]);
-    });
-    return { id: id, mime: mime, w: w, h: h, pub: pub };
+    try {
+      withLock_(function () {
+        sheet_('images').appendRow([enc_(id), 0, enc_(dev.hash), enc_(mime), w, h, bytes.length, false, Date.now(), false]);
+      });
+    } catch (e) {
+      trashFiles_([id]); // 목록에 못 올린 파일은 정리 대상에서도 빠지므로 바로 지웁니다.
+      throw e;
+    }
+    return { id: id, mime: mime, w: w, h: h, pub: false };
   });
 }
 
-/** 공개 링크로 못 보여 주는 사진(GIF, 공유 제한 계정)을 base64로 돌려줍니다. */
+/** 공개 링크로 못 보여 주는 사진(GIF 움짤 재생, 공유가 막힌 계정)을 base64로 돌려줍니다. */
 function apiImage(req) {
   return run_(function () {
     req = obj_(req);
     const id = String(req.id || '');
     if (!isFileId_(id)) fail_('사진 정보가 올바르지 않습니다.');
-    const cache = CacheService.getScriptCache();
-    const hit = cache.get('img:' + id);
-    if (hit) return JSON.parse(hit);
-    // 이 앱으로 올린 사진만 내보냅니다. (드라이브의 다른 파일은 절대 읽지 않음)
+    // 이 앱으로 올려 글에 붙은 사진만 내보냅니다. (드라이브의 다른 파일은 절대 읽지 않음)
     const sh = sheet_('images');
     const last = sh.getLastRow();
     const cell = last < 2 ? null : sh.getRange(2, I.id + 1, last - 1, 1)
@@ -322,11 +331,9 @@ function apiImage(req) {
     if (!cell) fail_('사진을 찾을 수 없습니다.');
     const r = sh.getRange(cell.getRow(), 1, 1, SCHEMA.images.length).getValues()[0];
     if (str_(r[I.id]) !== id || bool_(r[I.deleted])) fail_('삭제된 사진입니다.');
+    if (!num_(r[I.postId])) fail_('글에 첨부되지 않은 사진입니다.');
     const blob = DriveApp.getFileById(id).getBlob();
-    const out = { mime: str_(r[I.mime]) || blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
-    const json = JSON.stringify(out);
-    if (json.length < 95000) cache.put('img:' + id, json, 21600);
-    return out;
+    return { mime: str_(r[I.mime]) || blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
   });
 }
 
@@ -345,11 +352,15 @@ function apiCreatePost(req) {
     if (!f.content && !ids.length) fail_('내용을 입력해 주세요.');
     const cache = CacheService.getScriptCache();
     const cdKey = 'cd:post:' + dev.hash;
-    if (!admin && cache.get(cdKey)) fail_('도배 방지를 위해 ' + CONFIG.POST_COOLDOWN_SEC + '초에 한 번만 글을 쓸 수 있습니다.');
+    if (!admin) {
+      if (cache.get(cdKey)) fail_('도배 방지를 위해 ' + CONFIG.POST_COOLDOWN_SEC + '초에 한 번만 글을 쓸 수 있습니다.');
+      checkSiteLimit_('post', CONFIG.SITE_POSTS_PER_10MIN, '지금 글이 너무 많이 올라와서 잠시 글쓰기를 막았습니다. 몇 분 뒤에 다시 시도해 주세요.');
+    }
+    const shared = shareImages_(ids, dev, admin, 0);
     const result = withLock_(function () {
       const sh = sheet_('posts');
-      const imgs = claimImages_(ids, dev, admin, 0);
-      const id = nextId_(sh);
+      const imgs = claimImages_(ids, dev, admin, 0, shared);
+      const id = nextId_(sh, 'LAST_POST_ID');
       const no = bumpGalleryNo_(g.id);
       const salt = pw ? randomHex_(16) : '';
       const now = Date.now();
@@ -380,9 +391,10 @@ function apiCreatePost(req) {
       checkCellSize_(row);
       sh.appendRow(row);
       imgs.attach(id);
+      if (!admin) spendSiteLimit_('post');
       return { id: id, no: no, g: g.id };
     });
-    if (!admin && CONFIG.POST_COOLDOWN_SEC > 0) cache.put(cdKey, '1', CONFIG.POST_COOLDOWN_SEC);
+    if (!admin && CONFIG.POST_COOLDOWN_SEC > 0) cachePut_(cdKey, '1', CONFIG.POST_COOLDOWN_SEC);
     return result;
   });
 }
@@ -396,7 +408,7 @@ function apiPostForEdit(req) {
     const found = findById_('posts', int_(req.id));
     if (!found || bool_(found.r[P.deleted])) fail_('삭제되었거나 존재하지 않는 글입니다.');
     const g = gallery_(str_(found.r[P.gallery]), admin);
-    authorizeEdit_(found.r, req, dev, admin);
+    withLock_(function () { authorizeEdit_(found.r, req, dev, admin); });
     return {
       gallery: publicGallery_(g, admin),
       post: {
@@ -421,14 +433,23 @@ function apiUpdatePost(req) {
     if (!admin) checkBan_(dev);
     const id = int_(req.id);
     const ids = imageIds_(req.images);
-    return withLock_(function () {
+    const load = function () {
       const found = findById_('posts', id);
       if (!found || bool_(found.r[P.deleted])) fail_('삭제되었거나 존재하지 않는 글입니다.');
       const g = gallery_(str_(found.r[P.gallery]), admin);
       authorizeEdit_(found.r, req, dev, admin);
-      const f = postFields_(req, g);
-      if (!f.content && !ids.length) fail_('내용을 입력해 주세요.');
-      const imgs = claimImages_(ids, dev, admin, id);
+      return { found: found, g: g };
+    };
+    // 1) 권한부터 확인 (비밀번호 없이는 아래의 사진 공개 설정도 하지 않음)
+    const first = withLock_(load);
+    const f = postFields_(req, first.g);
+    if (!f.content && !ids.length) fail_('내용을 입력해 주세요.');
+    // 2) 새로 붙일 사진 공개 (드라이브 호출이 느려서 잠금 밖에서)
+    const shared = shareImages_(ids, dev, admin, id);
+    // 3) 저장 (잠금 안에서 다시 확인)
+    const done = withLock_(function () {
+      const found = load().found;
+      const imgs = claimImages_(ids, dev, admin, id, shared);
       const keep = {};
       ids.forEach(function (x) { keep[x] = true; });
       const removed = images_(found.r[P.images])
@@ -442,9 +463,10 @@ function apiUpdatePost(req) {
       sh.getRange(found.row, P.imageCount + 1, 1, 2).setValues([[imgs.list.length, enc_(thumbOf_(imgs.list))]]);
       sh.getRange(found.row, P.images + 1, 1, 2).setValues([[cells.images, cells.content]]);
       imgs.attach(id);
-      discardImages_(removed);
-      return { id: id, g: g.id };
+      return markImagesDeleted_(removed);
     });
+    trashFiles_(done);
+    return { id: id, g: first.g.id };
   });
 }
 
@@ -453,17 +475,18 @@ function apiDeletePost(req) {
     req = obj_(req);
     const dev = device_(req);
     const admin = isAdmin_(req);
-    return withLock_(function () {
+    const done = withLock_(function () {
       const found = findById_('posts', int_(req.id));
       if (!found || bool_(found.r[P.deleted])) fail_('이미 삭제되었거나 존재하지 않는 글입니다.');
       if (!admin) {
         if (bool_(found.r[P.admin])) fail_('관리자 글은 삭제할 수 없습니다.');
-        checkPassword_(found.r[P.pwHash], found.r[P.salt], req.pw, dev);
+        checkPassword_(found.r[P.pwHash], found.r[P.salt], req.pw, dev, 'p' + num_(found.r[P.id]));
       }
       sheet_('posts').getRange(found.row, P.deleted + 1).setValue(true);
-      discardImages_(images_(found.r[P.images]).map(function (x) { return x.id; }));
-      return { ok: true, g: str_(found.r[P.gallery]) };
+      return { g: str_(found.r[P.gallery]), trash: markImagesDeleted_(images_(found.r[P.images]).map(function (x) { return x.id; })) };
     });
+    trashFiles_(done.trash);
+    return { ok: true, g: done.g };
   });
 }
 
@@ -510,7 +533,10 @@ function apiAddComment(req) {
     const pw = admin && !req.pw ? '' : cleanPassword_(req.pw);
     const cache = CacheService.getScriptCache();
     const cdKey = 'cd:cmt:' + dev.hash;
-    if (!admin && cache.get(cdKey)) fail_('도배 방지를 위해 ' + CONFIG.COMMENT_COOLDOWN_SEC + '초에 한 번만 댓글을 쓸 수 있습니다.');
+    if (!admin) {
+      if (cache.get(cdKey)) fail_('도배 방지를 위해 ' + CONFIG.COMMENT_COOLDOWN_SEC + '초에 한 번만 댓글을 쓸 수 있습니다.');
+      checkSiteLimit_('comment', CONFIG.SITE_COMMENTS_PER_10MIN, '지금 댓글이 너무 많이 올라와서 잠시 댓글을 막았습니다. 몇 분 뒤에 다시 시도해 주세요.');
+    }
     withLock_(function () {
       const found = findById_('posts', postId);
       if (!found || bool_(found.r[P.deleted])) fail_('삭제되었거나 존재하지 않는 글입니다.');
@@ -524,15 +550,16 @@ function apiAddComment(req) {
         else if (bool_(pc.r[C.deleted])) fail_('삭제된 댓글에는 답글을 달 수 없습니다.');
       }
       const cs = sheet_('comments');
-      const id = nextId_(cs);
+      const id = nextId_(cs, 'LAST_COMMENT_ID');
       const salt = pw ? randomHex_(16) : '';
       const row = [id, postId, parent, enc_(nick), enc_(dev.code), admin, Date.now(), false,
         enc_(dev.hash), enc_(pw ? hashPassword_(pw, salt) : ''), enc_(salt), enc_(content)];
       checkCellSize_(row);
       cs.appendRow(row);
       sheet_('posts').getRange(found.row, P.comments + 1).setValue(num_(found.r[P.comments]) + 1);
+      if (!admin) spendSiteLimit_('comment');
     });
-    if (!admin && CONFIG.COMMENT_COOLDOWN_SEC > 0) cache.put(cdKey, '1', CONFIG.COMMENT_COOLDOWN_SEC);
+    if (!admin && CONFIG.COMMENT_COOLDOWN_SEC > 0) cachePut_(cdKey, '1', CONFIG.COMMENT_COOLDOWN_SEC);
     const comments = commentsOf_(postId);
     return { comments: comments, count: countComments_(comments) };
   });
@@ -550,7 +577,7 @@ function apiDeleteComment(req) {
       postId = num_(found.r[C.postId]);
       if (!admin) {
         if (bool_(found.r[C.admin])) fail_('관리자 댓글은 삭제할 수 없습니다.');
-        checkPassword_(found.r[C.pwHash], found.r[C.salt], req.pw, dev);
+        checkPassword_(found.r[C.pwHash], found.r[C.salt], req.pw, dev, 'c' + num_(found.r[C.id]));
       }
       sheet_('comments').getRange(found.row, C.deleted + 1).setValue(true);
       const post = findById_('posts', postId);
@@ -574,12 +601,12 @@ function apiAdminLogin(req) {
     if (fails >= 5 || allFails >= 50) fail_('로그인 시도가 너무 많습니다. 10분 뒤에 다시 시도해 주세요.');
     const given = normalizeKey_(req.key);
     if (!given || given !== normalizeKey_(props_().ADMIN_KEY)) {
-      cache.put(mine, String(fails + 1), 600);
-      cache.put('admfail:all', String(allFails + 1), 600);
+      cachePut_(mine, String(fails + 1), 600);
+      cachePut_('admfail:all', String(allFails + 1), 600);
       fail_('관리자 키가 맞지 않습니다.');
     }
     const token = randomHex_(32);
-    cache.put('adm:' + token, adminKeyTag_(), 21600);
+    if (!cachePut_('adm:' + token, adminKeyTag_(), 21600)) fail_('잠시 뒤에 다시 로그인해 주세요.');
     return { token: token, hours: 6 };
   });
 }
@@ -752,15 +779,21 @@ function search_(rows, query, st) {
   return rows.filter(function (m) { return has(m.title) || hits[m.row]; });
 }
 
-/** 본문 열에서 검색어가 들어간 행 번호들. (본문은 JSON 형태로 저장되므로 검색어도 같은 형태로 바꿔서 찾음) */
+/** 본문 열에서 검색어가 들어간 행 번호들. */
 function contentHits_(query) {
   const sh = sheet_('posts');
   const last = sh.getLastRow();
   const hits = {};
   if (last < 2) return hits;
+  // 본문은 JSON 형태로 저장되므로 검색어도 같은 형태로 바꿔 TextFinder 로 후보를 찾고,
+  // 줄바꿈(\n) 같은 표기에 잘못 걸린 후보는 실제 본문으로 다시 확인해 걸러 냅니다.
   const needle = JSON.stringify(query).slice(1, -1);
-  sh.getRange(2, P.content + 1, last - 1, 1).createTextFinder(needle).findAll()
-    .forEach(function (cell) { hits[cell.getRow()] = true; });
+  const rows = sh.getRange(2, P.content + 1, last - 1, 1).createTextFinder(needle).findAll()
+    .map(function (cell) { return cell.getRow(); });
+  const lower = query.toLowerCase();
+  readRows_(sh, rows, 1, P.content + 1).forEach(function (x) {
+    if (str_(x.r[0]).toLowerCase().indexOf(lower) >= 0) hits[x.row] = true;
+  });
   return hits;
 }
 
@@ -816,7 +849,7 @@ function authorizeEdit_(r, req, dev, admin) {
     if (!admin) fail_('관리자 글은 관리자만 수정할 수 있습니다.');
     return;
   }
-  checkPassword_(r[P.pwHash], r[P.salt], req.pw, dev);
+  checkPassword_(r[P.pwHash], r[P.salt], req.pw, dev, 'p' + num_(r[P.id]));
 }
 
 function images_(cell) {
@@ -849,13 +882,12 @@ function imageIds_(v) {
 }
 
 /**
- * 글에 붙일 사진들을 확인합니다. (잠금 안에서 호출)
+ * 글에 붙일 사진들을 확인합니다. (읽기만 함)
  * - 새 사진: 아직 어느 글에도 붙지 않았고, 같은 기기가 올린 것만
  * - 수정 중인 글(postId)에 이미 붙어 있던 사진은 그대로 허용
  */
-function claimImages_(ids, dev, admin, postId) {
-  const out = { list: [], attach: function () {} };
-  if (!ids.length) return out;
+function inspectImages_(ids, dev, admin, postId) {
+  if (!ids.length) return [];
   const sh = sheet_('images');
   const last = sh.getLastRow();
   const rowOf = {};
@@ -866,8 +898,7 @@ function claimImages_(ids, dev, admin, postId) {
   const recs = {};
   readRows_(sh, ids.map(function (id) { return rowOf[id] || fail_(missing); }), SCHEMA.images.length)
     .forEach(function (x) { recs[x.row] = x.r; });
-  const newRows = [];
-  ids.forEach(function (id) {
+  return ids.map(function (id) {
     const row = rowOf[id];
     const r = recs[row];
     if (!r || str_(r[I.id]) !== id) fail_(missing);
@@ -875,32 +906,74 @@ function claimImages_(ids, dev, admin, postId) {
     const owner = num_(r[I.postId]);
     if (owner) {
       if (owner !== postId) fail_('다른 글에 쓰인 사진은 붙일 수 없습니다.');
-    } else {
-      if (!admin && str_(r[I.device]) !== dev.hash) fail_('직접 올린 사진만 붙일 수 있습니다.');
-      newRows.push(row);
+    } else if (!admin && str_(r[I.device]) !== dev.hash) {
+      fail_('직접 올린 사진만 붙일 수 있습니다.');
     }
-    out.list.push({ id: id, mime: str_(r[I.mime]), w: num_(r[I.width]), h: num_(r[I.height]), pub: bool_(r[I.public]) });
+    return { id: id, row: row, owner: owner, mime: str_(r[I.mime]), w: num_(r[I.width]), h: num_(r[I.height]), pub: bool_(r[I.public]) };
   });
-  out.attach = function (pid) {
-    newRows.forEach(function (row) { sh.getRange(row, I.postId + 1).setValue(pid); });
-  };
+}
+
+/**
+ * 새로 붙일 사진을 "링크가 있는 모든 사용자 보기"로 공개합니다. 드라이브 호출이 느려서 잠금 밖에서 부릅니다.
+ * 공유가 막힌 계정(일부 회사·학교 계정)이면 실패하고, 그 사진은 서버를 거쳐 보여 줍니다.
+ * 반환: { 파일ID: 공개 성공 여부 }
+ */
+function shareImages_(ids, dev, admin, postId) {
+  const out = {};
+  inspectImages_(ids, dev, admin, postId).forEach(function (x) {
+    if (x.owner || x.pub) return;
+    try {
+      DriveApp.getFileById(x.id).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      out[x.id] = true;
+    } catch (e) {
+      out[x.id] = false;
+    }
+  });
   return out;
 }
 
-/** 사진을 삭제 표시하고 드라이브 휴지통으로 보냅니다. */
-function discardImages_(ids) {
-  if (!ids || !ids.length) return;
+/** 잠금 안에서: 사진을 다시 확인하고, 글에 저장할 목록과 "글에 붙이기" 함수를 돌려줍니다. */
+function claimImages_(ids, dev, admin, postId, shared) {
+  shared = shared || {};
+  const recs = inspectImages_(ids, dev, admin, postId);
+  const list = recs.map(function (x) {
+    return { id: x.id, mime: x.mime, w: x.w, h: x.h, pub: shared[x.id] === undefined ? x.pub : shared[x.id] };
+  });
+  return {
+    list: list,
+    attach: function (pid) {
+      const sh = sheet_('images');
+      recs.forEach(function (x, i) {
+        if (x.owner) return;
+        sh.getRange(x.row, I.postId + 1).setValue(pid);
+        if (list[i].pub !== x.pub) sh.getRange(x.row, I.public + 1).setValue(list[i].pub);
+      });
+    },
+  };
+}
+
+/** 사진에 삭제 표시를 합니다. (잠금 안에서, 빠름) 표시한 ID 목록을 돌려주니 잠금 밖에서 trashFiles_ 로 지우세요. */
+function markImagesDeleted_(ids) {
+  if (!ids || !ids.length) return [];
   const sh = sheet_('images');
   const last = sh.getLastRow();
-  if (last < 2) return;
+  if (last < 2) return [];
   const want = {};
   ids.forEach(function (id) { want[id] = true; });
-  const cache = CacheService.getScriptCache();
+  const marked = [];
   sh.getRange(2, I.id + 1, last - 1, 1).getValues().forEach(function (r, i) {
     const id = str_(r[0]);
     if (!want[id]) return;
+    delete want[id];
     sh.getRange(i + 2, I.deleted + 1).setValue(true);
-    cache.remove('img:' + id);
+    marked.push(id);
+  });
+  return marked;
+}
+
+/** 드라이브 파일을 휴지통으로 보냅니다. (느려서 잠금 밖에서) 휴지통은 30일 뒤 자동으로 비워집니다. */
+function trashFiles_(ids) {
+  (ids || []).forEach(function (id) {
     try {
       DriveApp.getFileById(id).setTrashed(true);
     } catch (e) {
@@ -982,7 +1055,7 @@ function allGalleries_() {
   const list = readAll_('galleries').map(toGallery_).filter(function (g) { return g.id; });
   list.sort(function (a, b) { return a.order - b.order || a.createdAt - b.createdAt; });
   const json = JSON.stringify(list);
-  if (json.length < 90000) cache.put('galleries', json, 600);
+  cachePut_('galleries', json, 600);
   return list;
 }
 
@@ -1030,7 +1103,7 @@ function bans_() {
     return { device: str_(r[B.device]), code: str_(r[B.code]), until: num_(r[B.until]), reason: str_(r[B.reason]), at: num_(r[B.createdAt]) };
   }).filter(function (b) { return b.device; });
   const json = JSON.stringify(list);
-  if (json.length < 90000) cache.put('bans', json, 300);
+  cachePut_('bans', json, 300);
   return list;
 }
 
@@ -1112,14 +1185,23 @@ function newAdminKey_() {
   return randomHex_(24).replace(/(.{4})(?=.)/g, '$1-');
 }
 
-function checkPassword_(storedCell, saltCell, pw, dev) {
+/**
+ * 비밀번호 확인 (잠금 안에서 호출: 실패 횟수를 정확히 세기 위해)
+ * - 기기별: 10번 틀리면 10분 잠금
+ * - 대상(글·댓글)별: 20번 틀리면 마지막 실패부터 6시간 잠금. 식별값을 바꿔 가며 맞혀 보는 공격을 막습니다.
+ */
+function checkPassword_(storedCell, saltCell, pw, dev, target) {
   const cache = CacheService.getScriptCache();
-  const key = 'pwfail:' + dev.hash;
-  const fails = Number(cache.get(key) || 0);
-  if (fails >= 10) fail_('비밀번호를 너무 많이 틀렸습니다. 10분 뒤에 다시 시도해 주세요.');
+  const devKey = 'pwfail:' + dev.hash;
+  const targetKey = 'pwfail:' + target;
+  const devFails = Number(cache.get(devKey) || 0);
+  const targetFails = Number(cache.get(targetKey) || 0);
+  if (devFails >= 10) fail_('비밀번호를 너무 많이 틀렸습니다. 10분 뒤에 다시 시도해 주세요.');
+  if (targetFails >= 20) fail_('비밀번호를 틀린 횟수가 많아 지금은 수정·삭제할 수 없습니다. 몇 시간 뒤에 다시 시도하거나 관리자에게 문의해 주세요.');
   const stored = str_(storedCell);
   if (!stored || hashPassword_(pw === null || pw === undefined ? '' : String(pw), str_(saltCell)) !== stored) {
-    cache.put(key, String(fails + 1), 600);
+    cachePut_(devKey, String(devFails + 1), 600);
+    cachePut_(targetKey, String(targetFails + 1), 21600);
     fail_('비밀번호가 맞지 않습니다.');
   }
 }
@@ -1130,11 +1212,64 @@ function hashPassword_(pw, salt) {
   return h;
 }
 
+/** 같은 기기의 횟수 제한. seconds 단위의 고정 구간마다 limit 번까지. */
 function hit_(key, limit, seconds, message) {
   const cache = CacheService.getScriptCache();
-  const n = Number(cache.get(key) || 0);
+  const k = key + ':' + Math.floor(Date.now() / (seconds * 1000));
+  const n = Number(cache.get(k) || 0);
   if (n >= limit) fail_(message);
-  cache.put(key, String(n + 1), seconds);
+  cachePut_(k, String(n + 1), seconds);
+}
+
+function siteLimitKey_(name) {
+  return 'site:' + name + ':' + Math.floor(Date.now() / 600000);
+}
+
+/** 사이트 전체 10분당 한도. 넘으면 오류. (실제로 쓴 뒤 spendSiteLimit_ 로 셉니다) */
+function checkSiteLimit_(name, limit, message) {
+  if (!(limit > 0)) return;
+  if (Number(CacheService.getScriptCache().get(siteLimitKey_(name)) || 0) >= limit) fail_(message);
+}
+
+function spendSiteLimit_(name) {
+  const key = siteLimitKey_(name);
+  cachePut_(key, String(Number(CacheService.getScriptCache().get(key) || 0) + 1), 600);
+}
+
+/** 최근 24시간 동안 사이트 전체에 올라온 사진 수·용량 한도. (사진 목록의 끝부분만 읽음) */
+function checkUploadBudget_(newBytes) {
+  const sh = sheet_('images');
+  const last = sh.getLastRow();
+  if (last < 2) return;
+  const since = Date.now() - DAY_MS;
+  const take = Math.min(last - 1, CONFIG.SITE_UPLOADS_PER_DAY + 1);
+  const width = I.createdAt - I.bytes + 1;
+  const rows = sh.getRange(last - take + 1, I.bytes + 1, take, width).getValues();
+  let count = 0;
+  let bytes = newBytes;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (num_(rows[i][width - 1]) < since) break;
+    count++;
+    bytes += num_(rows[i][0]);
+  }
+  if (count >= CONFIG.SITE_UPLOADS_PER_DAY || bytes > CONFIG.SITE_UPLOAD_MB_PER_DAY * 1024 * 1024) {
+    fail_('오늘은 사이트 전체의 사진 업로드 한도에 도달했습니다. 내일 다시 시도해 주세요.');
+  }
+}
+
+/**
+ * CacheService.put 을 감쌉니다. 실패해도(용량 초과 등) 기능은 계속 동작합니다.
+ * 값 한도는 100KB(바이트)이고 한글은 글자당 3바이트라서 3만 자가 넘으면 저장하지 않습니다.
+ */
+function cachePut_(key, value, seconds) {
+  value = String(value);
+  if (value.length > 30000) return false;
+  try {
+    CacheService.getScriptCache().put(key, value, Math.max(1, Math.min(21600, Math.round(seconds))));
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 /* ───────────────────────────── 입력값 정리 ───────────────────────────── */
@@ -1208,7 +1343,7 @@ function props_() {
   }
   // 스크립트 속성은 하루 읽기 횟수 제한이 있어서 캐시에 6시간 보관합니다.
   PROPS_ = PropertiesService.getScriptProperties().getProperties();
-  if (isReady_(PROPS_)) cache.put('props', JSON.stringify(PROPS_), 21600);
+  if (isReady_(PROPS_)) cachePut_('props', JSON.stringify(PROPS_), 21600);
   return PROPS_;
 }
 
@@ -1256,7 +1391,7 @@ function ensureReady_() {
     if (Object.keys(next).length) sp.setProperties(next);
     resetPropsCache_();
     DB_ = null;
-    ensureSchema_(ss);
+    ensureSchema_(ss, !!next.SPREADSHEET_ID);
     return props_();
   }, 30000);
 }
@@ -1265,6 +1400,7 @@ function openFolder_(id) {
   try {
     return DriveApp.getFolderById(id);
   } catch (e) {
+    resetPropsCache_();
     return fail_('데이터 폴더를 열 수 없습니다. 폴더를 지웠다면 스크립트 속성에서 FOLDER_ID / IMAGE_FOLDER_ID 를 지우고 setup()을 다시 실행하세요.');
   }
 }
@@ -1273,28 +1409,34 @@ function openSpreadsheet_(id) {
   try {
     return SpreadsheetApp.openById(id);
   } catch (e) {
+    resetPropsCache_();
     return fail_('데이터 스프레드시트를 열 수 없습니다. 시트를 지웠다면 스크립트 속성에서 SPREADSHEET_ID 를 지우고 setup()을 다시 실행하세요.');
   }
 }
 
-function ensureSchema_(ss) {
+function ensureSchema_(ss, fresh) {
+  const before = ss.getSheets();
   Object.keys(SCHEMA).forEach(function (name) {
-    const sh = ss.getSheetByName(name) || ss.insertSheet(name);
-    initSheet_(sh, name);
+    initSheet_(ss.getSheetByName(name) || ss.insertSheet(name), name);
   });
-  // 새 스프레드시트에 기본으로 생기는 빈 시트(Sheet1, 시트1) 정리
-  ss.getSheets().forEach(function (sh) {
-    if (!Object.prototype.hasOwnProperty.call(SCHEMA, sh.getName()) && sh.getLastRow() === 0 && ss.getSheets().length > 1) {
-      ss.deleteSheet(sh);
-    }
-  });
+  // 방금 만든 스프레드시트에 기본으로 생기는 빈 시트(Sheet1, 시트1)만 정리합니다.
+  if (fresh) {
+    before.forEach(function (sh) {
+      if (!Object.prototype.hasOwnProperty.call(SCHEMA, sh.getName()) && sh.getLastRow() === 0) ss.deleteSheet(sh);
+    });
+  }
   seed_(ss);
 }
 
 function initSheet_(sh, name) {
-  if (sh.getLastRow() > 0) return;
-  sh.getRange(1, 1, 1, SCHEMA[name].length).setValues([SCHEMA[name]]).setFontWeight('bold');
-  sh.setFrozenRows(1);
+  const width = SCHEMA[name].length;
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, width).setValues([SCHEMA[name]]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  // 새 시트는 열이 26개라서, 안 쓰는 열을 지워 스프레드시트 셀 한도(1천만 개)를 아낍니다.
+  const max = sh.getMaxColumns();
+  if (max > width && sh.getLastColumn() <= width) sh.deleteColumns(width + 1, max - width);
 }
 
 function seed_(ss) {
@@ -1369,7 +1511,7 @@ function welcomeText_(g) {
 
 function installTriggers_() {
   const exists = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'cleanupOrphanImages'; });
-  if (!exists) ScriptApp.newTrigger('cleanupOrphanImages').timeBased().everyDays(1).atHour(4).create();
+  if (!exists) ScriptApp.newTrigger('cleanupOrphanImages').timeBased().everyHours(6).create();
 }
 
 let DB_ = null;
@@ -1407,7 +1549,7 @@ function readAll_(name, width) {
 }
 
 /** 여러 행을 읽되, 가까이 붙어 있는 행은 한 번에 묶어서 읽습니다. */
-function readRows_(sh, rowNums, width) {
+function readRows_(sh, rowNums, width, startCol) {
   const seen = {};
   const rows = rowNums.filter(function (r) {
     if (seen[r]) return false;
@@ -1420,7 +1562,7 @@ function readRows_(sh, rowNums, width) {
     let j = i;
     while (j + 1 < rows.length && rows[j + 1] - rows[j] <= 25) j++;
     const start = rows[i];
-    const block = sh.getRange(start, 1, rows[j] - start + 1, width).getValues();
+    const block = sh.getRange(start, startCol || 1, rows[j] - start + 1, width).getValues();
     for (let k = i; k <= j; k++) out.push({ row: rows[k], r: block[rows[k] - start] });
     i = j + 1;
   }
@@ -1446,10 +1588,17 @@ function findById_(name, id) {
   return num_(r[0]) === id ? { row: row, r: r } : null;
 }
 
-function nextId_(sh) {
+/**
+ * 새 번호 = max(시트 마지막 행 번호, 저장해 둔 마지막 번호) + 1. (잠금 안에서 호출)
+ * 누가 시트에서 마지막 행을 지워도 번호가 다시 쓰이지 않아, 옛 댓글·추천이 새 글에 붙지 않습니다.
+ */
+function nextId_(sh, counterKey) {
+  const sp = PropertiesService.getScriptProperties();
   const last = sh.getLastRow();
-  if (last < 2) return 1;
-  return Math.max(num_(sh.getRange(last, 1).getValue()), last - 1) + 1;
+  const fromSheet = last < 2 ? 0 : Math.max(num_(sh.getRange(last, 1).getValue()), last - 1);
+  const id = Math.max(fromSheet, Number(sp.getProperty(counterKey)) || 0) + 1;
+  sp.setProperty(counterKey, String(id));
+  return id;
 }
 
 let LOCK_DEPTH_ = 0;
@@ -1559,7 +1708,8 @@ function fmtDate_(ms) {
   return Utilities.formatDate(new Date(ms), CONFIG.TIME_ZONE, 'yyyy.MM.dd HH:mm');
 }
 
-function serviceUrl_() {
+function webAppUrl_() {
+  if (CONFIG.WEB_APP_URL) return CONFIG.WEB_APP_URL;
   try {
     return ScriptApp.getService().getUrl() || '';
   } catch (e) {

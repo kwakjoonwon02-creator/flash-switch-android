@@ -46,6 +46,10 @@ test('setup 은 시트·갤러리·안내 공지·정리 트리거를 한 번만
   assert.equal(env.rows('galleries').length, 4);
   assert.equal(env.rows('posts').length, 1);
   assert.deepEqual(env.triggers.map((t) => t.getHandlerFunction()), ['cleanupOrphanImages']);
+  assert.equal(env.triggers[0].spec.everyHours, 6);
+  // 안 쓰는 열은 지워서 셀 한도를 아낀다
+  assert.equal(env.sheet('votes').getMaxColumns(), 4);
+  assert.equal(env.sheet('posts').getMaxColumns(), 23);
   assert.match(env.props._m.ADMIN_KEY, /^[0-9a-f]{4}(-[0-9a-f]{4}){5}$/);
   // 시트는 드라이브 데이터 폴더 안으로 옮겨진다
   assert.equal(env.drive.files.get(ss.getId())._parents[0]._id, env.props._m.FOLDER_ID);
@@ -56,9 +60,17 @@ test('setup 은 시트·갤러리·안내 공지·정리 트리거를 한 번만
   assert.equal(env.triggers.length, 1);
 });
 
-test('브라우저에서 setup 을 불러도 관리자 키가 새어 나가지 않는다', () => {
+test('브라우저에서 setup 을 불러도 관리자 키가 새어 나가지 않고, 설정 뒤에는 주인만 실행할 수 있다', () => {
+  const blank = createGasEnv({ patch: NO_COOLDOWN });
+  assert.equal(blank.run('setup'), null, '처음 한 번은 누구나 초기화 가능, 반환값 없음');
+  assert.ok(blank.props._m.ADMIN_KEY);
+  assert.throws(() => blank.run('setup'), /편집기에서 직접 실행/);
   const env = freshEnv();
-  assert.equal(env.run('setup'), null);
+  assert.throws(() => env.run('setup'), /편집기에서 직접 실행/);
+  // 주인이 직접 만든 빈 시트는 다시 setup 해도 지우지 않는다
+  env.sheets.get(env.props._m.SPREADSHEET_ID).insertSheet('내 메모');
+  env.runAsEditor('setup');
+  assert.ok(env.sheets.get(env.props._m.SPREADSHEET_ID).getSheetByName('내 메모'));
   assert.throws(() => env.run('resetAdminKey'), /편집기에서 직접 실행/);
   assert.throws(() => env.run('fail_', 'x'), /Script function not found/);
   assert.throws(() => env.run('props_'), /Script function not found/);
@@ -91,7 +103,7 @@ test('설정이 한 번 끝나면 스크립트 속성을 다시 읽지 않는다
 
 /* ───────────── 글 ───────────── */
 
-test('글을 쓰면 목록·보기에 나오고, 조회수는 기기마다 한 번만 오른다', () => {
+test('글을 쓰면 목록·보기에 나오고, 이미 본 글은 조회수가 오르지 않는다', () => {
   const env = freshEnv();
   const res = post(env, A, { title: '첫 글', content: '안녕하세요', nick: '테스터', head: '정보' });
   assert.deepEqual(res, { id: 2, no: 2, g: 'free' });
@@ -107,9 +119,10 @@ test('글을 쓰면 목록·보기에 나오고, 조회수는 기기마다 한 �
   assert.equal(p.pwHash, undefined);
 
   assert.equal(env.run('apiView', { device: A, id: 2 }).post.views, 1);
-  assert.equal(env.run('apiView', { device: A, id: 2 }).post.views, 1);
+  assert.equal(env.run('apiView', { device: A, id: 2, seen: true }).post.views, 1); // 브라우저가 6시간 안에 본 글
   assert.equal(env.run('apiView', { device: B, id: 2 }).post.views, 2);
   assert.equal(env.run('apiView', { id: 2 }).post.views, 2); // 식별값 없으면 안 셈
+  assert.equal(env.cache._m.size < 20, true, '조회 기록을 서버 캐시에 쌓지 않는다');
 
   const other = post(env, B, { g: 'photo' });
   assert.equal(other.no, 1); // 갤러리마다 번호가 따로
@@ -177,12 +190,13 @@ test('사진을 올리고 글에 붙이면 공개 링크·썸네일·원본 데�
   const env = freshEnv();
   const img = upload(env, A, PNG, { w: 640, h: 480 });
   assert.equal(img.mime, 'image/png');
-  assert.equal(img.pub, true);
+  assert.equal(img.pub, false, '글에 붙기 전에는 비공개');
   assert.equal(img.w, 640);
   const file = env.drive.files.get(img.id);
-  assert.equal(file._access, 'ANYONE_WITH_LINK');
+  assert.equal(file._access, 'PRIVATE');
   assert.equal(file._parents[0]._id, env.props._m.IMAGE_FOLDER_ID);
   assert.equal(rowOf(env, 'images', img.id)[1], 0);
+  assert.throws(() => env.run('apiImage', { id: img.id }), /글에 첨부되지 않은 사진/);
 
   const gif = upload(env, A, GIF);
   assert.equal(gif.mime, 'image/gif');
@@ -191,7 +205,10 @@ test('사진을 올리고 글에 붙이면 공개 링크·썸네일·원본 데�
   assert.equal(v.images.length, 2);
   assert.equal(v.img, 2);
   assert.equal(v.thumb, img.id); // GIF는 썸네일로 안 씀
+  assert.deepEqual(v.images.map((x) => x.pub), [true, true]);
+  assert.equal(file._access, 'ANYONE_WITH_LINK', '글에 붙으면 공개');
   assert.equal(rowOf(env, 'images', img.id)[1], id);
+  assert.equal(rowOf(env, 'images', img.id)[7], true);
 
   assert.equal(env.run('apiImage', { id: img.id }).data, PNG);
   assert.equal(env.run('apiImage', { id: gif.id }).mime, 'image/gif');
@@ -500,6 +517,133 @@ test('검색(제목·내용·글쓴이·말머리)과 페이지 나누기', () =
   const searched = env.run('apiList', { device: A, g: 'free', q: '이용 안내', st: 'title' });
   assert.equal(searched.total, 1, '검색할 때는 공지도 결과에 포함');
   assert.equal(searched.notices.length, 0);
+});
+
+/* ───────────── 리뷰에서 나온 공격·한도 ───────────── */
+
+test('식별값을 바꿔 가며 비밀번호를 맞혀 봐도 글마다 20번 틀리면 잠긴다', () => {
+  const env = freshEnv();
+  const { id } = post(env, A, { pw: '0042' });
+  for (let i = 0; i < 20; i++) {
+    const dev = String(i).padStart(2, '0').repeat(16);
+    assert.throws(() => env.run('apiPostForEdit', { device: dev, id: id, pw: String(1000 + i) }), /맞지 않습니다/);
+  }
+  assert.throws(() => env.run('apiPostForEdit', { device: 'e'.repeat(32), id: id, pw: '0042' }), /틀린 횟수가 많아/);
+  assert.throws(() => env.run('apiDeletePost', { device: 'f'.repeat(32), id: id, pw: '0042' }), /틀린 횟수가 많아/);
+  // 관리자는 여전히 지울 수 있고, 다른 글은 영향 없음
+  const other = post(env, B, { pw: '9999' });
+  assert.equal(env.run('apiPostForEdit', { device: C, id: other.id, pw: '9999' }).post.id, other.id);
+  env.run('apiDeletePost', { device: A, admin: adminToken(env), id: id });
+  // 댓글도 따로 센다
+  const c = env.run('apiAddComment', { device: B, postId: other.id, pw: '1111', content: 'x' }).comments[0];
+  for (let i = 0; i < 20; i++) {
+    assert.throws(() => env.run('apiDeleteComment', { device: String(i % 10).repeat(32), id: c.id, pw: 'no' + i }), /맞지 않습니다|너무 많이 틀렸습니다/);
+  }
+  assert.throws(() => env.run('apiDeleteComment', { device: 'd'.repeat(32), id: c.id, pw: '1111' }), /틀린 횟수가 많아/);
+});
+
+test('사이트 전체 글·댓글 한도 (식별값을 바꿔도 적용, 관리자는 제외)', () => {
+  const env = freshEnv({ patch: NO_COOLDOWN + ' CONFIG.SITE_POSTS_PER_10MIN = 2; CONFIG.SITE_COMMENTS_PER_10MIN = 1;' });
+  post(env, A);
+  post(env, B);
+  assert.throws(() => post(env, C), /글이 너무 많이 올라와서/);
+  const token = adminToken(env);
+  const res = env.run('apiCreatePost', { device: C, admin: token, g: 'free', title: '관리자', content: 'x' });
+  env.run('apiAddComment', { device: A, postId: res.id, pw: '1234', content: '1' });
+  assert.throws(() => env.run('apiAddComment', { device: B, postId: res.id, pw: '1234', content: '2' }), /댓글이 너무 많이 올라와서/);
+  // 실패한 시도(검사에서 걸린 요청)는 한도를 쓰지 않는다
+  const env2 = freshEnv({ patch: NO_COOLDOWN + ' CONFIG.SITE_POSTS_PER_10MIN = 1;' });
+  assert.throws(() => post(env2, A, { title: '' }), /제목을 입력/);
+  post(env2, A);
+});
+
+test('사이트 전체 하루 사진 업로드 한도', () => {
+  const env = freshEnv({ patch: NO_COOLDOWN + ' CONFIG.SITE_UPLOADS_PER_DAY = 2;' });
+  upload(env, A);
+  upload(env, B);
+  assert.throws(() => upload(env, C), /업로드 한도/);
+  const files = env.drive.files.size;
+  // 하루가 지난 기록은 세지 않는다
+  env.sheet('images')._rows.forEach((r, i) => { if (i > 0) r[8] = Date.now() - 2 * 24 * 3600 * 1000; });
+  upload(env, C);
+  assert.equal(env.drive.files.size, files + 1);
+  const env2 = freshEnv({ patch: NO_COOLDOWN + ' CONFIG.SITE_UPLOAD_MB_PER_DAY = 0.0001;' });
+  upload(env2, A); // 68바이트
+  assert.throws(() => upload(env2, B), /업로드 한도/);
+});
+
+test('사진 목록 등록에 실패하면 올린 파일을 바로 지운다', () => {
+  const env = freshEnv();
+  env.lockBusy = true;
+  const before = Array.from(env.drive.files.values()).filter((f) => !f._trashed).length;
+  assert.throws(() => upload(env, A), /처리가 늦어지고/);
+  env.lockBusy = false;
+  const leftovers = Array.from(env.drive.files.values()).filter((f) => !f._trashed).length;
+  assert.equal(leftovers, before);
+});
+
+test('마지막 행을 지워도 번호를 다시 쓰지 않는다 (옛 댓글·추천이 새 글에 붙지 않게)', () => {
+  const env = freshEnv();
+  const { id } = post(env, A, { title: '지워질 글' });
+  env.run('apiAddComment', { device: B, postId: id, pw: '1234', content: '옛 댓글' });
+  env.run('apiVote', { device: B, id: id, type: 'up' });
+  const sh = env.sheet('posts');
+  sh.deleteRow(sh.getLastRow());
+  const next = post(env, C, { title: '새 글' });
+  assert.equal(next.id, id + 1);
+  const v = env.run('apiView', { device: B, id: next.id });
+  assert.equal(v.comments.length, 0);
+  assert.deepEqual(env.run('apiVote', { device: B, id: next.id, type: 'up' }), { up: 1, down: 0 });
+});
+
+test('내용 검색은 저장 형식(JSON의 \\n)에 잘못 걸리지 않는다', () => {
+  const env = freshEnv();
+  post(env, A, { title: '줄바꿈', content: '첫 줄\n둘째 줄' });
+  post(env, A, { title: '영어', content: 'internet' });
+  assert.equal(env.run('apiList', { device: A, g: 'free', q: 'n', st: 'content' }).total, 1);
+  assert.equal(env.run('apiList', { device: A, g: 'free', q: '줄\n둘', st: 'content' }).total, 0, '검색어 줄바꿈은 공백으로 바뀜');
+  assert.equal(env.run('apiList', { device: A, g: 'free', q: '줄 둘', st: 'content' }).total, 0);
+  assert.equal(env.run('apiList', { device: A, g: 'free', q: '둘째', st: 'content' }).total, 1);
+});
+
+test('시트를 지운 뒤 속성을 지우고 setup 을 다시 하면 새로 만들어진다', () => {
+  const env = freshEnv();
+  const oldId = env.props._m.SPREADSHEET_ID;
+  env.run('apiList', { device: A, g: 'free' }); // 속성이 캐시에 올라간 상태
+  env.sheets.delete(oldId);
+  assert.throws(() => env.run('apiList', { device: A, g: 'free' }), /스프레드시트를 열 수 없습니다/);
+  delete env.props._m.SPREADSHEET_ID;
+  env.runAsEditor('setup');
+  assert.notEqual(env.props._m.SPREADSHEET_ID, oldId);
+  assert.equal(env.run('apiList', { device: A, g: 'free' }).notices.length, 1);
+});
+
+test('차단 목록이 커져서 캐시에 못 넣어도 글쓰기는 계속 된다', () => {
+  const env = freshEnv();
+  const sh = env.sheet('bans');
+  for (let i = 0; i < 400; i++) {
+    sh.appendRow([JSON.stringify(String(i).padStart(40, '0')), JSON.stringify('abcd'), 0, JSON.stringify('도배와 욕설이 심해서 차단합니다 '.repeat(5)), Date.now()]);
+  }
+  post(env, A);
+  assert.equal(env.run('apiAdminInfo', { device: A, admin: adminToken(env) }).bans.length, 400);
+});
+
+test('조회가 아무리 많아도 캐시 항목 한도 때문에 도배 방지가 풀리지 않는다', () => {
+  const env = freshEnv({ patch: 'CONFIG.COMMENT_COOLDOWN_SEC = 0;' });
+  const { id } = post(env, A);
+  for (let i = 0; i < 1200; i++) env.run('apiView', { device: i.toString(16).padStart(32, '0'), id: id });
+  assert.equal(env.stats.cacheEvictions, 0);
+  assert.throws(() => post(env, A), /20초에 한 번만/);
+});
+
+test('원댓글이 지워진 스레드의 답글에도 답글을 달 수 있다', () => {
+  const env = freshEnv();
+  const { id } = post(env, A);
+  const top = env.run('apiAddComment', { device: B, postId: id, pw: '1111', content: '원댓글' }).comments[0];
+  const reply = env.run('apiAddComment', { device: C, postId: id, parentId: top.id, pw: '2222', content: '답글' }).comments[1];
+  env.run('apiDeleteComment', { device: B, id: top.id, pw: '1111' });
+  const res = env.run('apiAddComment', { device: A, postId: id, parentId: reply.id, pw: '3333', content: '답글의 답글' });
+  assert.deepEqual(res.comments.map((c) => [c.parent, c.deleted]), [[0, true], [top.id, false], [top.id, false]]);
 });
 
 /* ───────────── 견고함 ───────────── */

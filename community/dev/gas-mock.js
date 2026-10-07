@@ -211,6 +211,7 @@ class MockSheet {
     this._name = name;
     this._rows = [];
     this._frozen = 0;
+    this._maxCols = 26; // 실제 새 시트처럼 26열로 시작
   }
   getName() { return this._name; }
   getParent() { return this._ss; }
@@ -231,7 +232,14 @@ class MockSheet {
     return m;
   }
   getMaxRows() { return Math.max(1000, this._rows.length); }
-  getMaxColumns() { return 26; }
+  getMaxColumns() { return this._maxCols; }
+  deleteColumns(position, howMany) {
+    if (position < 1 || howMany < 1 || position + howMany - 1 > this._maxCols) throw new Error('Exception: Those columns are out of bounds.');
+    if (howMany >= this._maxCols) throw new Error("Exception: You can't delete all the columns on the sheet.");
+    this._rows.forEach((r) => { if (r) r.splice(position - 1, howMany); });
+    this._maxCols -= howMany;
+    return this;
+  }
   getRange(a, b, c, d) {
     if (typeof a === 'string') return this._a1(a);
     if (c === undefined) c = 1;
@@ -242,11 +250,13 @@ class MockSheet {
     if (a < 1 || b < 1) throw new Error('Exception: Those rows are out of bounds.');
     if (c < 1) throw new Error('Exception: The number of rows in the range must be at least 1.');
     if (d < 1) throw new Error('Exception: The number of columns in the range must be at least 1.');
+    if (b + d - 1 > this._maxCols) throw new Error('Exception: Those columns are out of bounds.');
     return new MockRange(this, a, b, c, d);
   }
   appendRow(values) {
     this._ss._env.stats.sheetCalls++;
     if (!Array.isArray(values)) throw new Error('Exception: appendRow expects an array');
+    if (values.length > this._maxCols) throw new Error('[mock] appendRow wider than the sheet (' + values.length + ' > ' + this._maxCols + ')');
     this._write(this.getLastRow() + 1, 1, [values]);
     return this;
   }
@@ -406,6 +416,13 @@ class MockCache {
     if (!Number.isInteger(seconds) || seconds < 1) throw new Error('Exception: Invalid argument: expirationInSeconds');
     if (seconds > 21600) seconds = 21600;
     this._m.set(k, { v: v, exp: this._env.now() + seconds * 1000 });
+    // 실제 CacheService: 항목이 1,000개를 넘으면 만료가 가장 늦은 900개만 남깁니다.
+    if (this._m.size > 1000) {
+      const now = this._env.now();
+      const keep = Array.from(this._m.entries()).filter((e) => e[1].exp > now).sort((a, b) => b[1].exp - a[1].exp).slice(0, 900);
+      this._env.stats.cacheEvictions += this._m.size - keep.length;
+      this._m = new Map(keep);
+    }
   }
   remove(k) { this._key(k); this._m.delete(k); }
   getAll(keys) {
@@ -512,7 +529,7 @@ function createGasEnv(options) {
     clockOffset: 0,
     logs: [],
     triggers: [],
-    stats: { propReads: 0, propWrites: 0, sheetCalls: 0, flushes: 0, executions: 0 },
+    stats: { propReads: 0, propWrites: 0, sheetCalls: 0, flushes: 0, executions: 0, cacheEvictions: 0 },
     sheets: new Map(),
     drive: { files: new Map(), folders: new Map(), root: null },
     now: () => Date.now() + env.clockOffset,
@@ -765,7 +782,7 @@ function createGasEnv(options) {
     }));
     const sheets = Array.from(env.sheets.values()).map((ss) => ({
       id: ss._id, name: ss._name,
-      sheets: ss._sheets.map((s) => ({ name: s._name, frozen: s._frozen, rows: s._rows.map((r) => (r || []).map(encodeCell)) })),
+      sheets: ss._sheets.map((s) => ({ name: s._name, frozen: s._frozen, maxCols: s._maxCols, rows: s._rows.map((r) => (r || []).map(encodeCell)) })),
     }));
     const cache = Array.from(env.cache._m.entries());
     return { version: 1, props: env.props._m, folders: folders, files: files, sheets: sheets, cache: cache, triggers: env.triggers.map((t) => t.spec) };
@@ -802,6 +819,7 @@ function createGasEnv(options) {
       ss._sheets = s.sheets.map((sh) => {
         const ms = new MockSheet(ss, sh.name);
         ms._frozen = sh.frozen;
+        ms._maxCols = sh.maxCols || 26;
         ms._rows = sh.rows.map((r) => r.map(decodeCell));
         return ms;
       });

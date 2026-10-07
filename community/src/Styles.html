@@ -203,6 +203,12 @@
   }
   .vimg img.loaded { min-width: 0; min-height: 0; background: none; }
   .vimg img.broken { cursor: default; min-height: 60px; }
+  .vimg.is-gif { position: relative; display: table; }
+  .gif-play {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 9px 16px; border: 0; border-radius: 99px;
+    background: rgba(0, 0, 0, 0.66); color: #fff; font-size: 14px; font-weight: 800; line-height: 1; white-space: nowrap;
+  }
+  .gif-play:disabled { cursor: default; opacity: 0.85; }
   .img-fail { display: inline-block; padding: 18px 20px; line-height: 1.4; font-size: 13px; color: var(--muted); background: #f6f6f6; border-radius: 3px; }
 
   .vote { padding: 16px; text-align: center; }
